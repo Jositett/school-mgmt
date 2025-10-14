@@ -3,9 +3,9 @@ import flet as ft
 import sqlite3
 import cv2
 import numpy as np
-import csv
 from datetime import datetime, date, timedelta
 from typing import List, Optional
+from utils import export_students_to_csv
 
 # Import face_recognition with proper error handling
 # Silence the import error by redirecting stderr
@@ -356,17 +356,6 @@ def delete_student(student_id: int) -> bool:
         return False
 
 
-def export_students_to_csv():
-    """Export all students to CSV file."""
-    students = get_all_students()
-    filename = f"students_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(['ID', 'Name', 'Age', 'Grade', 'Class'])
-        for student in students:
-            writer.writerow([student.id, student.name, student.age, 
-                           student.grade, student.class_name])
-    return filename
 
 
 def get_attendance_for_student(student_id: int, start_date: str, 

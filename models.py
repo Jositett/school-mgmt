@@ -1,13 +1,10 @@
-"""
-Data models for School Management System
-"""
-from typing import List, Optional
+from typing import Optional
 
 
 class Student:
     """Student data model."""
     def __init__(self, id: int, name: str, age: int, grade: str,
-                 class_id: Optional[int] = None, class_name: str = ""):
+                  class_id: Optional[int] = None, class_name: str = ""):
         self.id = id
         self.name = name
         self.age = age
@@ -34,7 +31,7 @@ class AttendanceRecord:
 class FeeRecord:
     """Fee record data model."""
     def __init__(self, id: int, student_id: int, amount: float, due_date: str,
-                 paid_date: Optional[str], status: str, description: str):
+                  paid_date: Optional[str], status: str, description: str):
         self.id = id
         self.student_id = student_id
         self.amount = amount

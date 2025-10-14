@@ -1,13 +1,24 @@
 """
-Main application entry point for School Management System
-"""
-import flet as ft
+Main entry point for the School Management System.
 
-from database import init_db, authenticate_user
+This file replaces the main function in school_system.py and imports UI views from the views module.
+"""
+
+import flet as ft
 from views import (
-    StudentView, AttendanceView, FeesView, FaceEnrolView, LiveAttendanceView
+    create_student_view,
+    create_attendance_view,
+    create_fees_view,
+    create_enrol_face_view,
+    create_live_attendance_view,
 )
-from utils import show_snackbar
+from database import authenticate_user, init_db, get_all_students
+from models import Student, Class, AttendanceRecord, FeeRecord
+from face_service import FaceService
+from utils import export_students_to_csv
+
+# Initialize FaceService singleton
+face_service = FaceService()
 
 
 def main(page: ft.Page):
@@ -30,22 +41,10 @@ def main(page: ft.Page):
 
     # State variables
     current_user = None
+    edit_student_id = None
     current_view = "students"
     selected_student_for_attendance = None
     selected_student_for_fees = None
-
-    # View instances
-    student_view = StudentView()
-    attendance_view = AttendanceView()
-    fees_view = FeesView()
-    face_enrol_view = FaceEnrolView()
-    live_attendance_view = LiveAttendanceView()
-
-    def logout(e):
-        """Logout current user."""
-        nonlocal current_user
-        current_user = None
-        show_login()
 
     def create_app_bar():
         """Create modern app bar."""
@@ -75,90 +74,116 @@ def main(page: ft.Page):
 
     def create_navigation_rail():
         """Create modern navigation rail."""
-        return ft.NavigationRail(
-            selected_index={
-                "students": 0,
-                "enrol_face": 1,
-                "live_attendance": 2,
-                "attendance": 3,
-                "fees": 4,
-            }.get(current_view, 0),
-            label_type=ft.NavigationRailLabelType.ALL,
-            min_width=100,
-            min_extended_width=200,
-            destinations=[
-                ft.NavigationRailDestination(
-                    icon=ft.Icons.PEOPLE_OUTLINE,
-                    selected_icon=ft.Icons.PEOPLE,
-                    label="Students",
-                ),
-                ft.NavigationRailDestination(
-                    icon=ft.Icons.PHOTO_CAMERA_OUTLINED,
-                    selected_icon=ft.Icons.PHOTO_CAMERA,
-                    label="Enrol Face",
-                ),
-                ft.NavigationRailDestination(
-                    icon=ft.Icons.FACE_OUTLINED,
-                    selected_icon=ft.Icons.FACE,
-                    label="Live Attendance",
-                ),
-                ft.NavigationRailDestination(
-                    icon=ft.Icons.EVENT_AVAILABLE_OUTLINED,
-                    selected_icon=ft.Icons.EVENT_AVAILABLE,
-                    label="Attendance",
-                ),
-                ft.NavigationRailDestination(
-                    icon=ft.Icons.PAYMENTS_OUTLINED,
-                    selected_icon=ft.Icons.PAYMENTS,
-                    label="Fees",
-                ),
-            ],
-            on_change=lambda e: change_view(e.control.selected_index),
+        return ft.Container(
+            content=ft.NavigationRail(
+                selected_index=0 if current_view == "students" else 1 if current_view == "enrol_face" else 2 if current_view == "live_attendance" else 3 if current_view == "fees" else 0,
+                label_type=ft.NavigationRailLabelType.ALL,
+                min_width=100,
+                min_extended_width=200,
+                destinations=[
+                    ft.NavigationRailDestination(
+                        icon=ft.Icons.PEOPLE_OUTLINE,
+                        selected_icon=ft.Icons.PEOPLE,
+                        label="Students",
+                    ),
+                    ft.NavigationRailDestination(
+                        icon=ft.Icons.PHOTO_CAMERA_OUTLINED,
+                        selected_icon=ft.Icons.PHOTO_CAMERA,
+                        label="Enrol Face",
+                    ),
+                    ft.NavigationRailDestination(
+                        icon=ft.Icons.FACE_OUTLINED,
+                        selected_icon=ft.Icons.FACE,
+                        label="Live Attendance",
+                    ),
+                    ft.NavigationRailDestination(
+                        icon=ft.Icons.PAYMENTS_OUTLINED,
+                        selected_icon=ft.Icons.PAYMENTS,
+                        label="Fees",
+                    ),
+                ],
+                on_change=lambda e: change_view(e.control.selected_index),
+            ),
+            height=page.window.height,
         )
 
     def change_view(index: int):
         """Change the current view based on navigation selection."""
         nonlocal current_view
-        view_map = {
-            0: "students",
-            1: "enrol_face",
-            2: "live_attendance",
-            3: "attendance",
-            4: "fees",
-        }
-        current_view = view_map.get(index, "students")
+        if index == 0:
+            current_view = "students"
+        elif index == 1:
+            current_view = "enrol_face"
+        elif index == 2:
+            current_view = "live_attendance"
+        elif index == 3:
+            current_view = "attendance"
+        elif index == 4:
+            current_view = "fees"
+        else:
+            current_view = "students"
+        show_main_app()
+
+    def show_snackbar(message: str, is_error: bool = False):
+        """Show snackbar notification."""
+        page.snack_bar = ft.SnackBar(
+            content=ft.Text(message),
+            bgcolor=ft.Colors.RED_400 if is_error else ft.Colors.GREEN_400,
+        )
+        page.snack_bar.open = True
+        page.update()
+
+    # Helper functions for navigation
+    def open_attendance_for_student(student):
+        """Open attendance view for a specific student."""
+        nonlocal current_view, selected_student_for_attendance
+        current_view = "attendance"
+        selected_student_for_attendance = student.id
+        show_main_app()
+
+    def open_fees_for_student(student):
+        """Open fees view for a specific student."""
+        nonlocal current_view, selected_student_for_fees
+        current_view = "fees"
+        selected_student_for_fees = student.id
         show_main_app()
 
     def show_main_app():
         """Show the main application interface."""
         page.controls.clear()
 
-        # Get the appropriate view
-        view_content = None
+        # Create main layout - FIXED: Proper NavigationRail height handling
+        main_content = None
         if current_view == "students":
-            view_content = student_view.create_view(page, current_user)
+            main_content = create_student_view(page, show_snackbar, current_view, edit_student_id, open_attendance_for_student, open_fees_for_student)
         elif current_view == "enrol_face":
-            view_content = face_enrol_view.create_view(page, current_user)
+            main_content = create_enrol_face_view(page, show_snackbar)
         elif current_view == "live_attendance":
-            view_content = live_attendance_view.create_view(page, current_user)
+            main_content = create_live_attendance_view(page, show_snackbar)
         elif current_view == "attendance":
-            view_content = attendance_view.create_view(page, current_user)
+            main_content = create_attendance_view(page, show_snackbar, selected_student_for_attendance)
         elif current_view == "fees":
-            view_content = fees_view.create_view(page, current_user)
+            main_content = create_fees_view(page, show_snackbar, selected_student_for_fees)
 
-        # Create main layout
+        # FIXED: Use Column with expand instead of trying to set NavigationRail height
         page.add(
             create_app_bar(),
             ft.Row([
                 create_navigation_rail(),
                 ft.VerticalDivider(width=1),
                 ft.Container(
-                    content=view_content,
+                    content=main_content,
                     expand=True,
                 ),
             ], expand=True)
         )
         page.update()
+
+    def logout(e):
+        """Logout current user."""
+        nonlocal current_user
+        current_user = None
+        show_login()
 
     def show_login():
         """Show login screen."""
@@ -182,11 +207,11 @@ def main(page: ft.Page):
 
         def handle_login(e):
             nonlocal current_user
-            if authenticate_user(username_field.value or "", password_field.value or ""):
+            if authenticate_user(username_field.value, password_field.value):
                 current_user = username_field.value
                 show_main_app()
             else:
-                show_snackbar(page, "Invalid username or password!", True)
+                show_snackbar("Invalid username or password!", True)
 
         page.add(
             ft.Container(

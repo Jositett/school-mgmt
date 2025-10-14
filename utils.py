@@ -1,11 +1,6 @@
-"""
-Utility functions for School Management System
-"""
 import csv
-from datetime import datetime, date, timedelta
-import flet as ft
-from models import Student
-from database import get_all_students, export_students_to_csv
+from datetime import datetime
+from database import get_all_students
 
 
 def export_students_to_csv():
@@ -19,13 +14,3 @@ def export_students_to_csv():
             writer.writerow([student.id, student.name, student.age,
                            student.grade, student.class_name])
     return filename
-
-
-def show_snackbar(page: ft.Page, message: str, is_error: bool = False):
-    """Show snackbar notification."""
-    page.snack_bar = ft.SnackBar(
-        content=ft.Text(message),
-        bgcolor=ft.Colors.RED_400 if is_error else ft.Colors.GREEN_400,
-    )
-    page.snack_bar.open = True
-    page.update()

@@ -1,13 +1,11 @@
-"""
-Face recognition service for School Management System
-"""
+import os, pickle, datetime, pathlib, requests, base64, time, threading
+import sqlite3
 import cv2
 import numpy as np
-import pathlib
-import requests
-import datetime
+from datetime import datetime
 
 # Import face_recognition with proper error handling
+# Silence the import error by redirecting stderr
 import sys
 from io import StringIO
 
@@ -27,7 +25,8 @@ except ImportError as e:
 
 sys.stderr = old_stderr  # Restore stderr
 
-from database import get_db_connection
+# Database setup
+DB_PATH = "school.db"
 
 MODEL_DIR = pathlib.Path("models")
 MODEL_DIR.mkdir(exist_ok=True)
@@ -52,17 +51,12 @@ class FaceService:
     # ---------- public API ----------
     def enrol_student(self, student_id: int, images_or_video: list[cv2.Mat]) -> bool:
         """Pass either a list of cv2 images or a list with one video frame every 200 ms."""
-        if not FACE_RECOGNITION_AVAILABLE or face_recognition is None:
-            return False
-
         encodings = []
         for frame in images_or_video:
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             boxes = face_recognition.face_locations(rgb, model="hog")  # or "cnn" if GPU
             if boxes:
-                encoding = face_recognition.face_encodings(rgb, boxes)[0]
-                encodings.append(encoding)
-
+                encodings.append(face_recognition.face_encodings(rgb, boxes)[0])
         if len(encodings) < 1:
             return False
         mean_encoding = np.mean(encodings, axis=0)                   # simple average
@@ -72,9 +66,6 @@ class FaceService:
 
     def recognise(self, frame: cv2.Mat) -> list[tuple[int, float]]:
         """Return [(student_id, distance), …] for all faces in frame (distance ≤ 0.45)."""
-        if not FACE_RECOGNITION_AVAILABLE or face_recognition is None:
-            return []
-
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         boxes = face_recognition.face_locations(rgb, model="hog")
         if not boxes:
@@ -90,16 +81,16 @@ class FaceService:
 
     # ---------- internal ----------
     def _load_encodings(self):
-        conn = get_db_connection()
+        conn = sqlite3.connect(DB_PATH)
         rows = conn.execute("SELECT student_id, encoding FROM face_encodings").fetchall()
         conn.close()
         self.known_ids = [r[0] for r in rows]
         self.known_encodings = [np.frombuffer(r[1], dtype=np.float32) for r in rows]
 
     def _save_encoding(self, student_id: int, enc: np.ndarray):
-        conn = get_db_connection()
+        conn = sqlite3.connect(DB_PATH)
         conn.execute(
             "INSERT OR REPLACE INTO face_encodings(student_id, encoding, updated_at) VALUES (?,?,?)",
-            (student_id, enc.tobytes(), datetime.datetime.now().isoformat()))
+            (student_id, enc.tobytes(), datetime.now().isoformat()))
         conn.commit()
         conn.close()

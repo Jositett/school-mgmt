@@ -1,12 +1,30 @@
-"""
-Database operations for School Management System
-"""
 import sqlite3
+from datetime import datetime, date
 from typing import List, Optional
 from models import Student, Class, AttendanceRecord, FeeRecord
-from datetime import date
 
-# Database configuration
+# Import face_recognition with proper error handling
+# Silence the import error by redirecting stderr
+import sys
+from io import StringIO
+
+old_stderr = sys.stderr  # Store original stderr
+redirected_stderr = StringIO()
+sys.stderr = redirected_stderr
+
+try:
+    import face_recognition
+    FACE_RECOGNITION_AVAILABLE = True
+except ImportError as e:
+    FACE_RECOGNITION_AVAILABLE = False
+    print(f"Face recognition module not available: {e}")
+    print("Face recognition features will be disabled.")
+    # Create a mock face_recognition module to prevent errors
+    face_recognition = None
+
+sys.stderr = old_stderr  # Restore stderr
+
+# Database setup
 DB_PATH = "school.db"
 
 
@@ -85,6 +103,7 @@ def init_db():
     conn.close()
 
 
+# Database operations
 def get_db_connection():
     """Get database connection with row factory."""
     conn = sqlite3.connect(DB_PATH)
@@ -92,7 +111,6 @@ def get_db_connection():
     return conn
 
 
-# Class operations
 def get_all_classes() -> List[Class]:
     """Retrieve all classes from database."""
     conn = get_db_connection()
@@ -116,7 +134,6 @@ def add_class(name: str) -> bool:
         return False
 
 
-# Student operations
 def get_all_students(search_query: str = "") -> List[Student]:
     """Retrieve all students, optionally filtered by search query."""
     conn = get_db_connection()
@@ -226,7 +243,20 @@ def delete_student(student_id: int) -> bool:
         return False
 
 
-# Attendance operations
+def export_students_to_csv():
+    """Export all students to CSV file."""
+    import csv
+    students = get_all_students()
+    filename = f"students_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(['ID', 'Name', 'Age', 'Grade', 'Class'])
+        for student in students:
+            writer.writerow([student.id, student.name, student.age,
+                           student.grade, student.class_name])
+    return filename
+
+
 def get_attendance_for_student(student_id: int, start_date: str,
                                end_date: str) -> List[AttendanceRecord]:
     """Get attendance records for a student within date range."""
@@ -238,7 +268,7 @@ def get_attendance_for_student(student_id: int, start_date: str,
         ORDER BY date DESC
     """, (student_id, start_date, end_date))
     records = [AttendanceRecord(row['student_id'], row['date'], row['status'])
-               for row in cursor.fetchall()]
+              for row in cursor.fetchall()]
     conn.close()
     return records
 
@@ -260,7 +290,6 @@ def update_attendance(student_id: int, date_str: str, status: str) -> bool:
         return False
 
 
-# Fee operations
 def get_fees_for_student(student_id: int) -> List[FeeRecord]:
     """Get all fee records for a student."""
     conn = get_db_connection()
@@ -331,7 +360,6 @@ def delete_fee_record(fee_id: int) -> bool:
         return False
 
 
-# Authentication
 def authenticate_user(username: str, password: str) -> bool:
     """Authenticate user credentials."""
     conn = get_db_connection()
@@ -341,3 +369,66 @@ def authenticate_user(username: str, password: str) -> bool:
     result = cursor.fetchone()
     conn.close()
     return result is not None
+
+
+class FaceService:
+    """Singleton that keeps one in-memory copy of all encodings."""
+    _instance = None
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._load_encodings()
+        return cls._instance
+
+    # ---------- public API ----------
+    def enrol_student(self, student_id: int, images_or_video: list) -> bool:
+        """Pass either a list of cv2 images or a list with one video frame every 200 ms."""
+        import cv2
+        import numpy as np
+        encodings = []
+        for frame in images_or_video:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            boxes = face_recognition.face_locations(rgb, model="hog")  # or "cnn" if GPU
+            if boxes:
+                encodings.append(face_recognition.face_encodings(rgb, boxes)[0])
+        if len(encodings) < 1:
+            return False
+        mean_encoding = np.mean(encodings, axis=0)                   # simple average
+        self._save_encoding(student_id, mean_encoding)
+        self._load_encodings()                                       # refresh RAM
+        return True
+
+    def recognise(self, frame) -> list[tuple[int, float]]:
+        """Return [(student_id, distance), …] for all faces in frame (distance ≤ 0.45)."""
+        import cv2
+        import numpy as np
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        boxes = face_recognition.face_locations(rgb, model="hog")
+        if not boxes:
+            return []
+        unknown_encodings = face_recognition.face_encodings(rgb, boxes)
+        results = []
+        for enc in unknown_encodings:
+            distances = face_recognition.face_distance(self.known_encodings, enc)
+            best_idx = np.argmin(distances)
+            if distances[best_idx] <= 0.45:          # tune threshold if needed
+                results.append((self.known_ids[best_idx], float(distances[best_idx])))
+        return results
+
+    # ---------- internal ----------
+    def _load_encodings(self):
+        import numpy as np
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute("SELECT student_id, encoding FROM face_encodings").fetchall()
+        conn.close()
+        self.known_ids = [r[0] for r in rows]
+        self.known_encodings = [np.frombuffer(r[1], dtype=np.float32) for r in rows]
+
+    def _save_encoding(self, student_id: int, enc):
+        import numpy as np
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            "INSERT OR REPLACE INTO face_encodings(student_id, encoding, updated_at) VALUES (?,?,?)",
+            (student_id, enc.tobytes(), datetime.now().isoformat()))
+        conn.commit()
+        conn.close()

@@ -136,5 +136,13 @@ cython_debug/
 *.sqlite3
 school.db
 
-# Original monolithic file (kept during transition)
-# school_system.py
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+
+# Additional log directories
+logs/
