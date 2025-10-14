@@ -74,38 +74,43 @@ def main(page: ft.Page):
 
     def create_navigation_rail():
         """Create modern navigation rail."""
-        return ft.Container(
-            content=ft.NavigationRail(
-                selected_index=0 if current_view == "students" else 1 if current_view == "enrol_face" else 2 if current_view == "live_attendance" else 3 if current_view == "fees" else 0,
-                label_type=ft.NavigationRailLabelType.ALL,
-                min_width=100,
-                min_extended_width=200,
-                destinations=[
-                    ft.NavigationRailDestination(
-                        icon=ft.Icons.PEOPLE_OUTLINE,
-                        selected_icon=ft.Icons.PEOPLE,
-                        label="Students",
-                    ),
-                    ft.NavigationRailDestination(
-                        icon=ft.Icons.PHOTO_CAMERA_OUTLINED,
-                        selected_icon=ft.Icons.PHOTO_CAMERA,
-                        label="Enrol Face",
-                    ),
-                    ft.NavigationRailDestination(
-                        icon=ft.Icons.FACE_OUTLINED,
-                        selected_icon=ft.Icons.FACE,
-                        label="Live Attendance",
-                    ),
-                    ft.NavigationRailDestination(
-                        icon=ft.Icons.PAYMENTS_OUTLINED,
-                        selected_icon=ft.Icons.PAYMENTS,
-                        label="Fees",
-                    ),
-                ],
-                on_change=lambda e: change_view(e.control.selected_index),
-            ),
-            height=page.window.height,
-        )
+        # Check if window width is available and below mobile breakpoint
+        window_width = getattr(page.window, 'width', 800)
+        if window_width < 800:  # Mobile breakpoint
+            return ft.Container()
+        else:
+            return ft.Container(
+                content=ft.NavigationRail(
+                    selected_index=0 if current_view == "students" else 1 if current_view == "enrol_face" else 2 if current_view == "live_attendance" else 3 if current_view == "fees" else 0,
+                    label_type=ft.NavigationRailLabelType.ALL,
+                    min_width=100,
+                    min_extended_width=200,
+                    destinations=[
+                        ft.NavigationRailDestination(
+                            icon=ft.Icons.PEOPLE_OUTLINE,
+                            selected_icon=ft.Icons.PEOPLE,
+                            label="Students",
+                        ),
+                        ft.NavigationRailDestination(
+                            icon=ft.Icons.PHOTO_CAMERA_OUTLINED,
+                            selected_icon=ft.Icons.PHOTO_CAMERA,
+                            label="Enrol Face",
+                        ),
+                        ft.NavigationRailDestination(
+                            icon=ft.Icons.FACE_OUTLINED,
+                            selected_icon=ft.Icons.FACE,
+                            label="Live Attendance",
+                        ),
+                        ft.NavigationRailDestination(
+                            icon=ft.Icons.PAYMENTS_OUTLINED,
+                            selected_icon=ft.Icons.PAYMENTS,
+                            label="Fees",
+                        ),
+                    ],
+                    on_change=lambda e: change_view(e.control.selected_index),
+                ),
+                expand=True,
+            )
 
     def change_view(index: int):
         """Change the current view based on navigation selection."""
@@ -126,11 +131,12 @@ def main(page: ft.Page):
 
     def show_snackbar(message: str, is_error: bool = False):
         """Show snackbar notification."""
-        page.snack_bar = ft.SnackBar(
+        snack_bar = ft.SnackBar(
             content=ft.Text(message),
             bgcolor=ft.Colors.RED_400 if is_error else ft.Colors.GREEN_400,
         )
-        page.snack_bar.open = True
+        snack_bar.open = True
+        page.overlay.append(snack_bar)
         page.update()
 
     # Helper functions for navigation
@@ -150,9 +156,10 @@ def main(page: ft.Page):
 
     def show_main_app():
         """Show the main application interface."""
-        page.controls.clear()
+        if page.controls:
+            page.controls.clear()
 
-        # Create main layout - FIXED: Proper NavigationRail height handling
+        # Create main layout - Mobile-friendly responsive design
         main_content = None
         if current_view == "students":
             main_content = create_student_view(page, show_snackbar, current_view, edit_student_id, open_attendance_for_student, open_fees_for_student)
@@ -165,18 +172,28 @@ def main(page: ft.Page):
         elif current_view == "fees":
             main_content = create_fees_view(page, show_snackbar, selected_student_for_fees)
 
-        # FIXED: Use Column with expand instead of trying to set NavigationRail height
-        page.add(
-            create_app_bar(),
-            ft.Row([
-                create_navigation_rail(),
-                ft.VerticalDivider(width=1),
+        # Responsive layout: Stack vertically on mobile, side-by-side on desktop
+        window_width = getattr(page.window, 'width', 800)
+        if window_width < 800:  # Mobile breakpoint
+            page.add(
+                create_app_bar(),
                 ft.Container(
                     content=main_content,
                     expand=True,
-                ),
-            ], expand=True)
-        )
+                )
+            )
+        else:
+            page.add(
+                create_app_bar(),
+                ft.Row([
+                    create_navigation_rail(),
+                    ft.VerticalDivider(width=1),
+                    ft.Container(
+                        content=main_content,
+                        expand=True,
+                    ),
+                ], expand=True)
+            )
         page.update()
 
     def logout(e):
@@ -187,13 +204,14 @@ def main(page: ft.Page):
 
     def show_login():
         """Show login screen."""
-        page.controls.clear()
+        if page.controls:
+            page.controls.clear()
 
         # Use prefix_icon (works in 0.28.3 despite deprecation warning)
         username_field = ft.TextField(
             label="Username",
             prefix_icon=ft.Icons.PERSON,
-            width=300,
+            width=min(300, getattr(page.window, 'width', 400) * 0.8),  # Responsive width
             autofocus=True,
         )
 
@@ -202,13 +220,15 @@ def main(page: ft.Page):
             prefix_icon=ft.Icons.LOCK,
             password=True,
             can_reveal_password=True,
-            width=300,
+            width=min(300, getattr(page.window, 'width', 400) * 0.8),  # Responsive width
         )
 
         def handle_login(e):
             nonlocal current_user
-            if authenticate_user(username_field.value, password_field.value):
-                current_user = username_field.value
+            username = username_field.value or ""
+            password = password_field.value or ""
+            if authenticate_user(username, password):
+                current_user = username
                 show_main_app()
             else:
                 show_snackbar("Invalid username or password!", True)
@@ -218,8 +238,8 @@ def main(page: ft.Page):
                 content=ft.Column([
                     ft.Image(
                         src="https://cdn-icons-png.flaticon.com/512/2966/2966307.png",
-                        width=100,
-                        height=100,
+                        width=min(100, getattr(page.window, 'width', 400) * 0.2),  # Responsive image size
+                        height=min(100, getattr(page.window, 'width', 400) * 0.2),
                     ),
                     ft.Text("School Management System", size=24, weight=ft.FontWeight.BOLD),
                     ft.Divider(height=20),
@@ -228,7 +248,7 @@ def main(page: ft.Page):
                     ft.ElevatedButton(
                         "Login",
                         icon=ft.Icons.LOGIN,
-                        width=300,
+                        width=min(300, getattr(page.window, 'width', 400) * 0.8),
                         on_click=handle_login,
                     ),
                 ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=20),
