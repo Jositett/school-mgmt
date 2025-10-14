@@ -2,7 +2,8 @@ import flet as ft
 from datetime import date
 from typing import List, Optional
 from utils import export_students_to_csv
-from database import get_all_classes, add_class, get_all_students, add_student, update_student, delete_student
+from database import get_all_batches, add_batch, get_all_classes, add_class, get_all_students, add_student, update_student, delete_student
+from models import Batch
 from models import Student, Class
 
 
@@ -24,11 +25,11 @@ def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student
         input_filter=ft.NumbersOnlyInputFilter(),
     )
 
-    grade_field = ft.TextField(
-        label="Grade",
-        hint_text="e.g., 10th",
-        prefix_icon=ft.Icons.SCHOOL,
-        width=150,
+    batch_dropdown = ft.Dropdown(
+        label="Batch",
+        hint_text="Select batch",
+        # No icon for dropdown in 0.28.3
+        width=200,
     )
 
     class_dropdown = ft.Dropdown(
@@ -40,7 +41,7 @@ def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student
 
     search_field = ft.TextField(
         label="Search",
-        hint_text="Search by name, grade, or class",
+        hint_text="Search by name, batch, or class",
         prefix_icon=ft.Icons.SEARCH,
         on_change=lambda e: update_student_list(),
         expand=True,
@@ -52,12 +53,18 @@ def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student
         expand=True,
     )
 
-    def load_classes():
-        """Load classes into dropdown."""
+    def load_batches():
+        """Load batches and classes into dropdowns."""
+        batches = get_all_batches()
         classes = get_all_classes()
+        batch_dropdown.options = [
+            ft.dropdown.Option(key=str(b.id), text=b.name) for b in batches
+        ]
         class_dropdown.options = [
             ft.dropdown.Option(key=str(c.id), text=c.name) for c in classes
         ]
+        if batches:
+            batch_dropdown.value = str(batches[0].id)
         if classes:
             class_dropdown.value = str(classes[0].id)
 
@@ -79,6 +86,7 @@ def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student
             )
         else:
             for student in students:
+                batch_text = student.batch_name or "No batch"
                 student_list_view.controls.append(
                     ft.Card(
                         content=ft.Container(
@@ -102,7 +110,7 @@ def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student
                                         ft.Text(f"{student.age} years", size=12, color=ft.Colors.GREY_600),
                                         ft.VerticalDivider(width=1),
                                         ft.Icon(ft.Icons.SCHOOL, size=16, color=ft.Colors.GREY_600),
-                                        ft.Text(f"Grade {student.grade}", size=12, color=ft.Colors.GREY_600),
+                                        ft.Text(f"Batch {batch_text}", size=12, color=ft.Colors.GREY_600),
                                         ft.VerticalDivider(width=1),
                                         ft.Icon(ft.Icons.CLASS_, size=16, color=ft.Colors.GREY_600),
                                         ft.Text(student.class_name or "No class", size=12, color=ft.Colors.GREY_600),
@@ -146,7 +154,7 @@ def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student
         edit_student_id = student.id
         name_field.value = student.name
         age_field.value = str(student.age)
-        grade_field.value = student.grade
+        batch_dropdown.value = str(student.batch_id) if student.batch_id else None
         class_dropdown.value = str(student.class_id) if student.class_id else None
         page.update()
 
@@ -155,13 +163,12 @@ def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student
         edit_student_id = None
         name_field.value = ""
         age_field.value = ""
-        grade_field.value = ""
-        load_classes()
+        load_batches()
         page.update()
 
     def save_student(e):
         """Save or update student."""
-        if not name_field.value or not age_field.value or not grade_field.value:
+        if not name_field.value or not age_field.value or not batch_dropdown.value:
             show_snackbar("All fields are required!", True)
             return
 
@@ -171,10 +178,11 @@ def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student
                 show_snackbar("Age must be between 5 and 18!", True)
                 return
 
+            batch_id = int(batch_dropdown.value) if batch_dropdown.value else None
             class_id = int(class_dropdown.value) if class_dropdown.value else None
 
             if edit_student_id is None:
-                if add_student(name_field.value, age, grade_field.value, class_id):
+                if add_student(name_field.value, age, batch_id, class_id):
                     show_snackbar("Student added successfully!")
                     clear_form()
                     update_student_list()
@@ -182,7 +190,7 @@ def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student
                     show_snackbar("Error adding student!", True)
             else:
                 if update_student(edit_student_id, name_field.value, age,
-                                grade_field.value, class_id):
+                                batch_id, class_id):
                     show_snackbar("Student updated successfully!")
                     clear_form()
                     update_student_list()
@@ -229,6 +237,43 @@ def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student
         except Exception as ex:
             show_snackbar(f"Export failed: {str(ex)}", True)
 
+    def add_batch_dialog(e):
+        """Show dialog to add new batch."""
+        batch_name_field = ft.TextField(
+            label="Batch Name",
+            hint_text="e.g., 2024-2025",
+            autofocus=True,
+        )
+
+        def save_batch(e):
+            if batch_name_field.value and add_batch(batch_name_field.value):
+                load_batches()
+                show_snackbar("Batch added successfully!")
+                dialog.open = False
+                page.update()
+            else:
+                show_snackbar("Error adding batch! Name might be duplicate.", True)
+
+        def close_dialog(e):
+            dialog.open = False
+            page.update()
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Add New Batch"),
+            content=ft.Container(
+                content=batch_name_field,
+                width=300,
+            ),
+            actions=[
+                ft.TextButton("Cancel", on_click=close_dialog),
+                ft.TextButton("Add", on_click=save_batch),
+            ],
+        )
+        page.overlay.append(dialog)
+        dialog.open = True
+        page.update()
+
     def add_class_dialog(e):
         """Show dialog to add new class."""
         class_name_field = ft.TextField(
@@ -239,7 +284,7 @@ def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student
 
         def save_class(e):
             if class_name_field.value and add_class(class_name_field.value):
-                load_classes()
+                load_batches()
                 show_snackbar("Class added successfully!")
                 dialog.open = False
                 page.update()
@@ -267,7 +312,7 @@ def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student
         page.update()
 
     # Initialize
-    load_classes()
+    load_batches()
     update_student_list()
 
     # Build view
@@ -296,8 +341,14 @@ def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student
                     ]),
                     ft.Row([
                         age_field,
-                        grade_field,
+                        batch_dropdown,
                         class_dropdown,
+                        ft.IconButton(
+                            icon=ft.Icons.ADD_CIRCLE,
+                            icon_color=ft.Colors.BLUE_700,
+                            tooltip="Add New Batch",
+                            on_click=add_batch_dialog,
+                        ),
                         ft.IconButton(
                             icon=ft.Icons.ADD_CIRCLE,
                             icon_color=ft.Colors.GREEN_700,

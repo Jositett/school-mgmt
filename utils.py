@@ -9,8 +9,8 @@ def export_students_to_csv():
     filename = f"students_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
         writer = csv.writer(csvfile)
-        writer.writerow(['ID', 'Name', 'Age', 'Grade', 'Class'])
+        writer.writerow(['ID', 'Name', 'Age', 'Batch', 'Class'])
         for student in students:
             writer.writerow([student.id, student.name, student.age,
-                           student.grade, student.class_name])
+                           student.batch_name, student.class_name])
     return filename

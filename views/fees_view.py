@@ -48,7 +48,7 @@ def create_fees_view(page: ft.Page, show_snackbar, selected_student_for_fees):
         from database import get_all_students
         students = get_all_students()
         student_dropdown.options = [
-            ft.dropdown.Option(key=str(s.id), text=f"{s.name} - Grade {s.grade}")
+            ft.dropdown.Option(key=str(s.id), text=f"{s.name} - Batch {s.batch_name}")
             for s in students
         ]
         if students:
@@ -215,7 +215,7 @@ def create_fees_view(page: ft.Page, show_snackbar, selected_student_for_fees):
                 selected_student_for_fees,
                 amount,
                 due_date_field.value,
-                description_field.value
+                description_field.value or ""
             ):
                 show_snackbar("Fee record added successfully!")
                 # Reset form
@@ -240,8 +240,8 @@ def create_fees_view(page: ft.Page, show_snackbar, selected_student_for_fees):
             last_date=date(2030, 12, 31),
         )
         page.overlay.append(date_picker)
+        date_picker.open = True
         page.update()
-        date_picker.pick_date()
 
     # Make date field clickable to open calendar
     due_date_field.on_click = open_calendar

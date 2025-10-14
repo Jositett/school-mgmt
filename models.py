@@ -1,14 +1,23 @@
 from typing import Optional
 
 
+class Batch:
+    """Batch data model."""
+    def __init__(self, id: int, name: str):
+        self.id = id
+        self.name = name
+
+
 class Student:
     """Student data model."""
-    def __init__(self, id: int, name: str, age: int, grade: str,
+    def __init__(self, id: int, name: str, age: int,
+                  batch_id: Optional[int] = None, batch_name: str = "",
                   class_id: Optional[int] = None, class_name: str = ""):
         self.id = id
         self.name = name
         self.age = age
-        self.grade = grade
+        self.batch_id = batch_id
+        self.batch_name = batch_name
         self.class_id = class_id
         self.class_name = class_name
 

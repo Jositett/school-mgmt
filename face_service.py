@@ -49,7 +49,7 @@ class FaceService:
         return cls._instance
 
     # ---------- public API ----------
-    def enrol_student(self, student_id: int, images_or_video: list[cv2.Mat]) -> bool:
+    def enrol_student(self, student_id: int, images_or_video: list[np.ndarray]) -> bool:
         """Pass either a list of cv2 images or a list with one video frame every 200 ms."""
         if not FACE_RECOGNITION_AVAILABLE or face_recognition is None:
             return False
@@ -67,7 +67,7 @@ class FaceService:
         self._load_encodings()                                       # refresh RAM
         return True
 
-    def recognise(self, frame: cv2.Mat) -> list[tuple[int, float]]:
+    def recognise(self, frame: np.ndarray) -> list[tuple[int, float]]:
         """Return [(student_id, distance), …] for all faces in frame (distance ≤ 0.45)."""
         if not FACE_RECOGNITION_AVAILABLE or face_recognition is None:
             return []

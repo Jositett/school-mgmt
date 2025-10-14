@@ -1,7 +1,7 @@
 import sqlite3
 from datetime import datetime, date
 from typing import List, Optional
-from models import Student, Class, AttendanceRecord, FeeRecord
+from models import Student, Batch, Class, AttendanceRecord, FeeRecord
 
 # Import face_recognition with proper error handling
 # Silence the import error by redirecting stderr
@@ -43,6 +43,13 @@ def init_db():
     ''')
 
     cursor.execute('''
+        CREATE TABLE IF NOT EXISTS batches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE
+        )
+    ''')
+
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS classes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE
@@ -54,8 +61,9 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             age INTEGER NOT NULL,
-            grade TEXT NOT NULL,
+            batch_id INTEGER,
             class_id INTEGER,
+            FOREIGN KEY (batch_id) REFERENCES batches (id),
             FOREIGN KEY (class_id) REFERENCES classes (id)
         )
     ''')
@@ -111,6 +119,29 @@ def get_db_connection():
     return conn
 
 
+def get_all_batches() -> List[Batch]:
+    """Retrieve all batches from database."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM batches ORDER BY name")
+    batches = [Batch(row['id'], row['name']) for row in cursor.fetchall()]
+    conn.close()
+    return batches
+
+
+def add_batch(name: str) -> bool:
+    """Add a new batch to database."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO batches (name) VALUES (?)", (name,))
+        conn.commit()
+        conn.close()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+
 def get_all_classes() -> List[Class]:
     """Retrieve all classes from database."""
     conn = get_db_connection()
@@ -140,18 +171,22 @@ def get_all_students(search_query: str = "") -> List[Student]:
     cursor = conn.cursor()
     if search_query:
         query = """
-            SELECT s.id, s.name, s.age, s.grade, s.class_id, c.name as class_name
+            SELECT s.id, s.name, s.age, s.batch_id, b.name as batch_name,
+                   s.class_id, c.name as class_name
             FROM students s
+            LEFT JOIN batches b ON s.batch_id = b.id
             LEFT JOIN classes c ON s.class_id = c.id
-            WHERE s.name LIKE ? OR s.grade LIKE ? OR c.name LIKE ?
+            WHERE s.name LIKE ? OR b.name LIKE ? OR c.name LIKE ?
             ORDER BY s.name
         """
         search_term = f"%{search_query}%"
         cursor.execute(query, (search_term, search_term, search_term))
     else:
         query = """
-            SELECT s.id, s.name, s.age, s.grade, s.class_id, c.name as class_name
+            SELECT s.id, s.name, s.age, s.batch_id, b.name as batch_name,
+                   s.class_id, c.name as class_name
             FROM students s
+            LEFT JOIN batches b ON s.batch_id = b.id
             LEFT JOIN classes c ON s.class_id = c.id
             ORDER BY s.name
         """
@@ -163,7 +198,8 @@ def get_all_students(search_query: str = "") -> List[Student]:
             row['id'],
             row['name'],
             row['age'],
-            row['grade'],
+            row['batch_id'],
+            row['batch_name'] or "",
             row['class_id'],
             row['class_name'] or ""
         ))
@@ -176,8 +212,10 @@ def get_student_by_id(student_id: int) -> Optional[Student]:
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT s.id, s.name, s.age, s.grade, s.class_id, c.name as class_name
+        SELECT s.id, s.name, s.age, s.batch_id, b.name as batch_name,
+               s.class_id, c.name as class_name
         FROM students s
+        LEFT JOIN batches b ON s.batch_id = b.id
         LEFT JOIN classes c ON s.class_id = c.id
         WHERE s.id = ?
     """, (student_id,))
@@ -188,21 +226,22 @@ def get_student_by_id(student_id: int) -> Optional[Student]:
             row['id'],
             row['name'],
             row['age'],
-            row['grade'],
+            row['batch_id'],
+            row['batch_name'] or "",
             row['class_id'],
             row['class_name'] or ""
         )
     return None
 
 
-def add_student(name: str, age: int, grade: str, class_id: Optional[int]) -> bool:
+def add_student(name: str, age: int, batch_id: Optional[int] = None, class_id: Optional[int] = None) -> bool:
     """Add a new student to database."""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO students (name, age, grade, class_id) VALUES (?, ?, ?, ?)",
-            (name, age, grade, class_id)
+            "INSERT INTO students (name, age, batch_id, class_id) VALUES (?, ?, ?, ?)",
+            (name, age, batch_id, class_id)
         )
         conn.commit()
         conn.close()
@@ -211,15 +250,15 @@ def add_student(name: str, age: int, grade: str, class_id: Optional[int]) -> boo
         return False
 
 
-def update_student(student_id: int, name: str, age: int, grade: str,
-                   class_id: Optional[int]) -> bool:
+def update_student(student_id: int, name: str, age: int,
+                   batch_id: Optional[int] = None, class_id: Optional[int] = None) -> bool:
     """Update an existing student."""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "UPDATE students SET name = ?, age = ?, grade = ?, class_id = ? WHERE id = ?",
-            (name, age, grade, class_id, student_id)
+            "UPDATE students SET name = ?, age = ?, batch_id = ?, class_id = ? WHERE id = ?",
+            (name, age, batch_id, class_id, student_id)
         )
         conn.commit()
         conn.close()
@@ -250,10 +289,10 @@ def export_students_to_csv():
     filename = f"students_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
         writer = csv.writer(csvfile)
-        writer.writerow(['ID', 'Name', 'Age', 'Grade', 'Class'])
+        writer.writerow(['ID', 'Name', 'Age', 'Batch', 'Class'])
         for student in students:
             writer.writerow([student.id, student.name, student.age,
-                           student.grade, student.class_name])
+                           student.batch_name, student.class_name])
     return filename
 
 
@@ -383,14 +422,16 @@ class FaceService:
     # ---------- public API ----------
     def enrol_student(self, student_id: int, images_or_video: list) -> bool:
         """Pass either a list of cv2 images or a list with one video frame every 200 ms."""
+        if not FACE_RECOGNITION_AVAILABLE:
+            return False
         import cv2
         import numpy as np
         encodings = []
         for frame in images_or_video:
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            boxes = face_recognition.face_locations(rgb, model="hog")  # or "cnn" if GPU
+            boxes = face_recognition.face_locations(rgb, model="hog")  # type: ignore # or "cnn" if GPU
             if boxes:
-                encodings.append(face_recognition.face_encodings(rgb, boxes)[0])
+                encodings.append(face_recognition.face_encodings(rgb, boxes)[0])  # type: ignore
         if len(encodings) < 1:
             return False
         mean_encoding = np.mean(encodings, axis=0)                   # simple average
@@ -400,16 +441,18 @@ class FaceService:
 
     def recognise(self, frame) -> list[tuple[int, float]]:
         """Return [(student_id, distance), …] for all faces in frame (distance ≤ 0.45)."""
+        if not FACE_RECOGNITION_AVAILABLE:
+            return []
         import cv2
         import numpy as np
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        boxes = face_recognition.face_locations(rgb, model="hog")
+        boxes = face_recognition.face_locations(rgb, model="hog")  # type: ignore
         if not boxes:
             return []
-        unknown_encodings = face_recognition.face_encodings(rgb, boxes)
+        unknown_encodings = face_recognition.face_encodings(rgb, boxes)  # type: ignore
         results = []
         for enc in unknown_encodings:
-            distances = face_recognition.face_distance(self.known_encodings, enc)
+            distances = face_recognition.face_distance(self.known_encodings, enc)  # type: ignore
             best_idx = np.argmin(distances)
             if distances[best_idx] <= 0.45:          # tune threshold if needed
                 results.append((self.known_ids[best_idx], float(distances[best_idx])))
