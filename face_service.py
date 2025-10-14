@@ -51,12 +51,15 @@ class FaceService:
     # ---------- public API ----------
     def enrol_student(self, student_id: int, images_or_video: list[cv2.Mat]) -> bool:
         """Pass either a list of cv2 images or a list with one video frame every 200 ms."""
+        if not FACE_RECOGNITION_AVAILABLE or face_recognition is None:
+            return False
+
         encodings = []
         for frame in images_or_video:
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            boxes = face_recognition.face_locations(rgb, model="hog")  # or "cnn" if GPU
+            boxes = face_recognition.face_locations(rgb, model="hog")  # type: ignore # or "cnn" if GPU
             if boxes:
-                encodings.append(face_recognition.face_encodings(rgb, boxes)[0])
+                encodings.append(face_recognition.face_encodings(rgb, boxes)[0])  # type: ignore
         if len(encodings) < 1:
             return False
         mean_encoding = np.mean(encodings, axis=0)                   # simple average
@@ -66,14 +69,17 @@ class FaceService:
 
     def recognise(self, frame: cv2.Mat) -> list[tuple[int, float]]:
         """Return [(student_id, distance), …] for all faces in frame (distance ≤ 0.45)."""
+        if not FACE_RECOGNITION_AVAILABLE or face_recognition is None:
+            return []
+
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        boxes = face_recognition.face_locations(rgb, model="hog")
+        boxes = face_recognition.face_locations(rgb, model="hog")  # type: ignore
         if not boxes:
             return []
-        unknown_encodings = face_recognition.face_encodings(rgb, boxes)
+        unknown_encodings = face_recognition.face_encodings(rgb, boxes)  # type: ignore
         results = []
         for enc in unknown_encodings:
-            distances = face_recognition.face_distance(self.known_encodings, enc)
+            distances = face_recognition.face_distance(self.known_encodings, enc)  # type: ignore
             best_idx = np.argmin(distances)
             if distances[best_idx] <= 0.45:          # tune threshold if needed
                 results.append((self.known_ids[best_idx], float(distances[best_idx])))
