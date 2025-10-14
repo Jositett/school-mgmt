@@ -136,10 +136,5 @@ cython_debug/
 *.sqlite3
 school.db
 
-# Refactored modules (keeping original for now during testing)
-# models.py
-# database.py
-# face_service.py
-# utils.py
-# views.py
-# main.py
+# Original monolithic file (kept during transition)
+# school_system.py
