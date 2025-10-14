@@ -1,603 +1,32 @@
-import os, pickle, datetime, pathlib, requests, base64, time, threading
+"""
+UI view modules for School Management System
+"""
 import flet as ft
-import sqlite3
+from datetime import date, timedelta
+import time
+import threading
+import base64
 import cv2
-import numpy as np
-import csv
-from datetime import datetime, date, timedelta
-from typing import List, Optional
 
-# Import face_recognition with proper error handling
-# Silence the import error by redirecting stderr
-import sys
-from io import StringIO
-
-old_stderr = sys.stderr  # Store original stderr
-redirected_stderr = StringIO()
-sys.stderr = redirected_stderr
-
-try:
-    import face_recognition
-    FACE_RECOGNITION_AVAILABLE = True
-except ImportError as e:
-    FACE_RECOGNITION_AVAILABLE = False
-    print(f"Face recognition module not available: {e}")
-    print("Face recognition features will be disabled.")
-    # Create a mock face_recognition module to prevent errors
-    face_recognition = None
-
-sys.stderr = old_stderr  # Restore stderr
-
-# Database setup
-DB_PATH = "school.db"
+from models import Student
+from database import (
+    get_all_classes, add_class, get_all_students, get_student_by_id,
+    add_student, update_student, delete_student,
+    get_attendance_for_student, update_attendance,
+    get_fees_for_student, add_fee_record, update_fee_status, delete_fee_record
+)
+from face_service import FaceService
+from utils import show_snackbar, export_students_to_csv
 
 
-def init_db():
-    """Initialize the database with required tables."""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # Create tables
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL
-        )
-    ''')
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS classes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE
-        )
-    ''')
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS students (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            age INTEGER NOT NULL,
-            grade TEXT NOT NULL,
-            class_id INTEGER,
-            FOREIGN KEY (class_id) REFERENCES classes (id)
-        )
-    ''')
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS attendance (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            student_id INTEGER NOT NULL,
-            date TEXT NOT NULL,
-            status TEXT NOT NULL CHECK(status IN ('Present', 'Absent', 'Late')),
-            FOREIGN KEY (student_id) REFERENCES students (id),
-            UNIQUE(student_id, date)
-        )
-    ''')
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS fees (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            student_id INTEGER NOT NULL,
-            amount REAL NOT NULL,
-            due_date TEXT NOT NULL,
-            paid_date TEXT,
-            status TEXT NOT NULL CHECK(status IN ('Pending', 'Paid')),
-            description TEXT,
-            FOREIGN KEY (student_id) REFERENCES students (id)
-        )
-    ''')
+class StudentView:
+    """Student management view."""
 
-    # Create face_encodings table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS face_encodings (
-            student_id INTEGER PRIMARY KEY,
-            encoding   BLOB NOT NULL,
-            updated_at TEXT  NOT NULL,
-            FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
-        )
-    ''')
-    
-    # Create default admin user
-    cursor.execute("SELECT * FROM users WHERE username = 'admin'")
-    if not cursor.fetchone():
-        cursor.execute("INSERT INTO users (username, password) VALUES ('admin', 'admin123')")
-    
-    conn.commit()
-    conn.close()
+    def __init__(self):
+        self.edit_student_id = None
 
-
-# Data models
-class Student:
-    """Student data model."""
-    def __init__(self, id: int, name: str, age: int, grade: str, 
-                 class_id: Optional[int] = None, class_name: str = ""):
-        self.id = id
-        self.name = name
-        self.age = age
-        self.grade = grade
-        self.class_id = class_id
-        self.class_name = class_name
-
-
-class Class:
-    """Class data model."""
-    def __init__(self, id: int, name: str):
-        self.id = id
-        self.name = name
-
-
-class AttendanceRecord:
-    """Attendance record data model."""
-    def __init__(self, student_id: int, date: str, status: str):
-        self.student_id = student_id
-        self.date = date
-        self.status = status
-
-
-class FeeRecord:
-    """Fee record data model."""
-    def __init__(self, id: int, student_id: int, amount: float, due_date: str, 
-                 paid_date: Optional[str], status: str, description: str):
-        self.id = id
-        self.student_id = student_id
-        self.amount = amount
-        self.due_date = due_date
-        self.paid_date = paid_date
-        self.status = status
-        self.description = description
-
-
-MODEL_DIR = pathlib.Path("models")
-MODEL_DIR.mkdir(exist_ok=True)
-LANDMARKS = MODEL_DIR / "shape_predictor_68_face_landmarks.dat"
-
-# one-time download
-if not LANDMARKS.exists():
-    print("Downloading face landmark model …")
-    url = "https://github.com/AKSHAYUBHAT/face_recognition/raw/master/models/shape_predictor_68_face_landmarks.dat"
-    open(LANDMARKS,"wb").write(requests.get(url).content)
-
-
-class FaceService:
-    """Singleton that keeps one in-memory copy of all encodings."""
-    _instance = None
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._load_encodings()
-        return cls._instance
-
-    # ---------- public API ----------
-    def enrol_student(self, student_id: int, images_or_video: list[cv2.Mat]) -> bool:
-        """Pass either a list of cv2 images or a list with one video frame every 200 ms."""
-        encodings = []
-        for frame in images_or_video:
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            boxes = face_recognition.face_locations(rgb, model="hog")  # or "cnn" if GPU
-            if boxes:
-                encodings.append(face_recognition.face_encodings(rgb, boxes)[0])
-        if len(encodings) < 1:
-            return False
-        mean_encoding = np.mean(encodings, axis=0)                   # simple average
-        self._save_encoding(student_id, mean_encoding)
-        self._load_encodings()                                       # refresh RAM
-        return True
-
-    def recognise(self, frame: cv2.Mat) -> list[tuple[int, float]]:
-        """Return [(student_id, distance), …] for all faces in frame (distance ≤ 0.45)."""
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        boxes = face_recognition.face_locations(rgb, model="hog")
-        if not boxes:
-            return []
-        unknown_encodings = face_recognition.face_encodings(rgb, boxes)
-        results = []
-        for enc in unknown_encodings:
-            distances = face_recognition.face_distance(self.known_encodings, enc)
-            best_idx = np.argmin(distances)
-            if distances[best_idx] <= 0.45:          # tune threshold if needed
-                results.append((self.known_ids[best_idx], float(distances[best_idx])))
-        return results
-
-    # ---------- internal ----------
-    def _load_encodings(self):
-        conn = sqlite3.connect(DB_PATH)
-        rows = conn.execute("SELECT student_id, encoding FROM face_encodings").fetchall()
-        conn.close()
-        self.known_ids = [r[0] for r in rows]
-        self.known_encodings = [np.frombuffer(r[1], dtype=np.float32) for r in rows]
-
-    def _save_encoding(self, student_id: int, enc: np.ndarray):
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute(
-            "INSERT OR REPLACE INTO face_encodings(student_id, encoding, updated_at) VALUES (?,?,?)",
-            (student_id, enc.tobytes(), datetime.now().isoformat()))
-        conn.commit()
-        conn.close()
-
-
-# Database operations
-def get_db_connection():
-    """Get database connection with row factory."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def get_all_classes() -> List[Class]:
-    """Retrieve all classes from database."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM classes ORDER BY name")
-    classes = [Class(row['id'], row['name']) for row in cursor.fetchall()]
-    conn.close()
-    return classes
-
-
-def add_class(name: str) -> bool:
-    """Add a new class to database."""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO classes (name) VALUES (?)", (name,))
-        conn.commit()
-        conn.close()
-        return True
-    except sqlite3.IntegrityError:
-        return False
-
-
-def get_all_students(search_query: str = "") -> List[Student]:
-    """Retrieve all students, optionally filtered by search query."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    if search_query:
-        query = """
-            SELECT s.id, s.name, s.age, s.grade, s.class_id, c.name as class_name
-            FROM students s
-            LEFT JOIN classes c ON s.class_id = c.id
-            WHERE s.name LIKE ? OR s.grade LIKE ? OR c.name LIKE ?
-            ORDER BY s.name
-        """
-        search_term = f"%{search_query}%"
-        cursor.execute(query, (search_term, search_term, search_term))
-    else:
-        query = """
-            SELECT s.id, s.name, s.age, s.grade, s.class_id, c.name as class_name
-            FROM students s
-            LEFT JOIN classes c ON s.class_id = c.id
-            ORDER BY s.name
-        """
-        cursor.execute(query)
-    
-    students = []
-    for row in cursor.fetchall():
-        students.append(Student(
-            row['id'],
-            row['name'],
-            row['age'],
-            row['grade'],
-            row['class_id'],
-            row['class_name'] or ""
-        ))
-    conn.close()
-    return students
-
-
-def get_student_by_id(student_id: int) -> Optional[Student]:
-    """Get a single student by ID."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT s.id, s.name, s.age, s.grade, s.class_id, c.name as class_name
-        FROM students s
-        LEFT JOIN classes c ON s.class_id = c.id
-        WHERE s.id = ?
-    """, (student_id,))
-    row = cursor.fetchone()
-    conn.close()
-    if row:
-        return Student(
-            row['id'],
-            row['name'],
-            row['age'],
-            row['grade'],
-            row['class_id'],
-            row['class_name'] or ""
-        )
-    return None
-
-
-def add_student(name: str, age: int, grade: str, class_id: Optional[int]) -> bool:
-    """Add a new student to database."""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO students (name, age, grade, class_id) VALUES (?, ?, ?, ?)",
-            (name, age, grade, class_id)
-        )
-        conn.commit()
-        conn.close()
-        return True
-    except Exception:
-        return False
-
-
-def update_student(student_id: int, name: str, age: int, grade: str, 
-                   class_id: Optional[int]) -> bool:
-    """Update an existing student."""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE students SET name = ?, age = ?, grade = ?, class_id = ? WHERE id = ?",
-            (name, age, grade, class_id, student_id)
-        )
-        conn.commit()
-        conn.close()
-        return True
-    except Exception:
-        return False
-
-
-def delete_student(student_id: int) -> bool:
-    """Delete a student and all related records."""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM fees WHERE student_id = ?", (student_id,))
-        cursor.execute("DELETE FROM attendance WHERE student_id = ?", (student_id,))
-        cursor.execute("DELETE FROM students WHERE id = ?", (student_id,))
-        conn.commit()
-        conn.close()
-        return True
-    except Exception:
-        return False
-
-
-def export_students_to_csv():
-    """Export all students to CSV file."""
-    students = get_all_students()
-    filename = f"students_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(['ID', 'Name', 'Age', 'Grade', 'Class'])
-        for student in students:
-            writer.writerow([student.id, student.name, student.age, 
-                           student.grade, student.class_name])
-    return filename
-
-
-def get_attendance_for_student(student_id: int, start_date: str, 
-                               end_date: str) -> List[AttendanceRecord]:
-    """Get attendance records for a student within date range."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT * FROM attendance 
-        WHERE student_id = ? AND date BETWEEN ? AND ?
-        ORDER BY date DESC
-    """, (student_id, start_date, end_date))
-    records = [AttendanceRecord(row['student_id'], row['date'], row['status']) 
-               for row in cursor.fetchall()]
-    conn.close()
-    return records
-
-
-def update_attendance(student_id: int, date_str: str, status: str) -> bool:
-    """Update or insert attendance record."""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO attendance (student_id, date, status)
-            VALUES (?, ?, ?)
-            ON CONFLICT(student_id, date) DO UPDATE SET status = excluded.status
-        """, (student_id, date_str, status))
-        conn.commit()
-        conn.close()
-        return True
-    except Exception:
-        return False
-
-
-def get_fees_for_student(student_id: int) -> List[FeeRecord]:
-    """Get all fee records for a student."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT * FROM fees 
-        WHERE student_id = ?
-        ORDER BY due_date DESC
-    """, (student_id,))
-    records = [FeeRecord(
-        row['id'],
-        row['student_id'],
-        row['amount'],
-        row['due_date'],
-        row['paid_date'],
-        row['status'],
-        row['description'] or ""
-    ) for row in cursor.fetchall()]
-    conn.close()
-    return records
-
-
-def add_fee_record(student_id: int, amount: float, due_date: str, 
-                   description: str) -> bool:
-    """Add a new fee record."""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO fees (student_id, amount, due_date, status, description)
-            VALUES (?, ?, ?, 'Pending', ?)
-        """, (student_id, amount, due_date, description))
-        conn.commit()
-        conn.close()
-        return True
-    except Exception:
-        return False
-
-
-def update_fee_status(fee_id: int, status: str) -> bool:
-    """Update fee payment status."""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        paid_date = str(date.today()) if status == 'Paid' else None
-        cursor.execute("""
-            UPDATE fees 
-            SET status = ?, paid_date = ?
-            WHERE id = ?
-        """, (status, paid_date, fee_id))
-        conn.commit()
-        conn.close()
-        return True
-    except Exception:
-        return False
-
-
-def delete_fee_record(fee_id: int) -> bool:
-    """Delete a fee record."""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM fees WHERE id = ?", (fee_id,))
-        conn.commit()
-        conn.close()
-        return True
-    except Exception:
-        return False
-
-
-def authenticate_user(username: str, password: str) -> bool:
-    """Authenticate user credentials."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users WHERE username = ? AND password = ?", 
-                  (username, password))
-    result = cursor.fetchone()
-    conn.close()
-    return result is not None
-
-
-def main(page: ft.Page):
-    """Main application entry point."""
-    # Configure page
-    page.theme_mode = ft.ThemeMode.SYSTEM
-    page.title = "School Management System"
-    page.window.width = 1200
-    page.window.height = 800
-    page.window.min_width = 800
-    page.window.min_height = 600
-    page.padding = 0
-    page.scroll = ft.ScrollMode.AUTO
-    
-    # Modern color scheme
-    page.theme = ft.Theme(
-        color_scheme_seed=ft.Colors.BLUE,
-        use_material3=True,
-    )
-    
-    # State variables
-    current_user = None
-    edit_student_id = None
-    current_view = "students"
-    selected_student_for_attendance = None
-    selected_student_for_fees = None
-    
-    # Create UI components
-    def create_app_bar():
-        """Create modern app bar."""
-        return ft.AppBar(
-            title=ft.Text("School Management System", weight=ft.FontWeight.BOLD),
-            center_title=False,
-            bgcolor=ft.Colors.BLUE_700,
-            actions=[
-                ft.PopupMenuButton(
-                    items=[
-                        ft.PopupMenuItem(
-                            text=f"Logged in as: {current_user}",
-                            disabled=True,
-                        ),
-                        ft.PopupMenuItem(),
-                        ft.PopupMenuItem(
-                            text="Logout",
-                            icon=ft.Icons.LOGOUT,
-                            on_click=logout,
-                        ),
-                    ],
-                    icon=ft.Icons.ACCOUNT_CIRCLE,
-                    icon_color=ft.Colors.WHITE,
-                ),
-            ],
-        )
-    
-    def create_navigation_rail():
-        """Create modern navigation rail."""
-        return ft.NavigationRail(
-            selected_index=0 if current_view == "students" else 1 if current_view == "enrol_face" else 2 if current_view == "live_attendance" else 3 if current_view == "fees" else 0,
-            label_type=ft.NavigationRailLabelType.ALL,
-            min_width=100,
-            min_extended_width=200,
-            destinations=[
-                ft.NavigationRailDestination(
-                    icon=ft.Icons.PEOPLE_OUTLINE,
-                    selected_icon=ft.Icons.PEOPLE,
-                    label="Students",
-                ),
-                ft.NavigationRailDestination(
-                    icon=ft.Icons.PHOTO_CAMERA_OUTLINED,
-                    selected_icon=ft.Icons.PHOTO_CAMERA,
-                    label="Enrol Face",
-                ),
-                ft.NavigationRailDestination(
-                    icon=ft.Icons.FACE_OUTLINED,
-                    selected_icon=ft.Icons.FACE,
-                    label="Live Attendance",
-                ),
-                ft.NavigationRailDestination(
-                    icon=ft.Icons.PAYMENTS_OUTLINED,
-                    selected_icon=ft.Icons.PAYMENTS,
-                    label="Fees",
-                ),
-            ],
-            on_change=lambda e: change_view(e.control.selected_index),
-        )
-    
-    def change_view(index: int):
-        """Change the current view based on navigation selection."""
-        nonlocal current_view
-        if index == 0:
-            current_view = "students"
-        elif index == 1:
-            current_view = "enrol_face"
-        elif index == 2:
-            current_view = "live_attendance"
-        elif index == 3:
-            current_view = "attendance"
-        elif index == 4:
-            current_view = "fees"
-        else:
-            current_view = "students"
-        show_main_app()
-    
-    def show_snackbar(message: str, is_error: bool = False):
-        """Show snackbar notification."""
-        page.snack_bar = ft.SnackBar(
-            content=ft.Text(message),
-            bgcolor=ft.Colors.RED_400 if is_error else ft.Colors.GREEN_400,
-        )
-        page.snack_bar.open = True
-        page.update()
-    
-    # Student Management View
-    def create_student_view():
+    def create_view(self, page: ft.Page, current_user: str):
         """Create the student management view."""
-        nonlocal edit_student_id
-        
         # Form fields - Use prefix_icon (works in 0.28.3 despite deprecation warning)
         name_field = ft.TextField(
             label="Student Name",
@@ -605,7 +34,7 @@ def main(page: ft.Page):
             prefix_icon=ft.Icons.PERSON,
             expand=True,
         )
-        
+
         age_field = ft.TextField(
             label="Age",
             hint_text="5-18",
@@ -613,35 +42,35 @@ def main(page: ft.Page):
             width=120,
             input_filter=ft.NumbersOnlyInputFilter(),
         )
-        
+
         grade_field = ft.TextField(
             label="Grade",
             hint_text="e.g., 10th",
             prefix_icon=ft.Icons.SCHOOL,
             width=150,
         )
-        
+
         class_dropdown = ft.Dropdown(
             label="Class",
             hint_text="Select class",
             # No icon for dropdown in 0.28.3
             width=200,
         )
-        
+
         search_field = ft.TextField(
             label="Search",
             hint_text="Search by name, grade, or class",
             prefix_icon=ft.Icons.SEARCH,
-            on_change=lambda e: update_student_list(),
+            on_change=lambda e: self.update_student_list(students_list, e.control.value),
             expand=True,
         )
-        
-        student_list_view = ft.ListView(
+
+        students_list = ft.ListView(
             spacing=10,
             padding=20,
             expand=True,
         )
-        
+
         def load_classes():
             """Load classes into dropdown."""
             classes = get_all_classes()
@@ -650,14 +79,15 @@ def main(page: ft.Page):
             ]
             if classes:
                 class_dropdown.value = str(classes[0].id)
-        
+
         def update_student_list():
             """Update the student list display."""
-            students = get_all_students(search_field.value)
-            student_list_view.controls.clear()
-            
+            search_query = search_field.value
+            students = get_all_students(search_query)
+            students_list.controls.clear()
+
             if not students:
-                student_list_view.controls.append(
+                students_list.controls.append(
                     ft.Container(
                         content=ft.Column([
                             ft.Icon(ft.Icons.INBOX, size=64, color=ft.Colors.GREY_400),
@@ -669,7 +99,7 @@ def main(page: ft.Page):
                 )
             else:
                 for student in students:
-                    student_list_view.controls.append(
+                    students_list.controls.append(
                         ft.Card(
                             content=ft.Container(
                                 content=ft.Row([
@@ -703,25 +133,25 @@ def main(page: ft.Page):
                                             icon=ft.Icons.EDIT,
                                             icon_color=ft.Colors.BLUE_700,
                                             tooltip="Edit",
-                                            on_click=lambda e, s=student: edit_student(s),
+                                            on_click=lambda e, s=student: self.edit_student(s, name_field, age_field, grade_field, class_dropdown),
                                         ),
                                         ft.IconButton(
                                             icon=ft.Icons.CALENDAR_TODAY,
                                             icon_color=ft.Colors.GREEN_700,
                                             tooltip="Attendance",
-                                            on_click=lambda e, s=student: open_attendance_for_student(s),
+                                            on_click=lambda e, s=student: self.show_attendance_for_student(page, s),
                                         ),
                                         ft.IconButton(
                                             icon=ft.Icons.PAYMENTS,
                                             icon_color=ft.Colors.ORANGE_700,
                                             tooltip="Fees",
-                                            on_click=lambda e, s=student: open_fees_for_student(s),
+                                            on_click=lambda e, s=student: self.show_fees_for_student(page, s),
                                         ),
                                         ft.IconButton(
                                             icon=ft.Icons.DELETE,
                                             icon_color=ft.Colors.RED_700,
                                             tooltip="Delete",
-                                            on_click=lambda e, sid=student.id: confirm_delete_student(sid),
+                                            on_click=lambda e, sid=student.id: confirm_delete_student(page, sid),
                                         ),
                                     ], spacing=0),
                                 ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
@@ -730,76 +160,72 @@ def main(page: ft.Page):
                         )
                     )
             page.update()
-        
+
         def edit_student(student: Student):
             """Load student data for editing."""
-            nonlocal edit_student_id
-            edit_student_id = student.id
+            self.edit_student_id = student.id
             name_field.value = student.name
             age_field.value = str(student.age)
             grade_field.value = student.grade
             class_dropdown.value = str(student.class_id) if student.class_id else None
             page.update()
-        
+
         def clear_form():
             """Clear all form fields."""
-            nonlocal edit_student_id
-            edit_student_id = None
+            self.edit_student_id = None
             name_field.value = ""
             age_field.value = ""
             grade_field.value = ""
             load_classes()
             page.update()
-        
+
         def save_student(e):
             """Save or update student."""
-            nonlocal edit_student_id
-            
             if not name_field.value or not age_field.value or not grade_field.value:
-                show_snackbar("All fields are required!", True)
+                show_snackbar(page, "All fields are required!", True)
                 return
-            
+
             try:
                 age = int(age_field.value)
                 if age < 5 or age > 18:
-                    show_snackbar("Age must be between 5 and 18!", True)
+                    show_snackbar(page, "Age must be between 5 and 18!", True)
                     return
-                
+
                 class_id = int(class_dropdown.value) if class_dropdown.value else None
-                
-                if edit_student_id is None:
+
+                if self.edit_student_id is None:
                     if add_student(name_field.value, age, grade_field.value, class_id):
-                        show_snackbar("Student added successfully!")
+                        show_snackbar(page, "Student added successfully!")
                         clear_form()
                         update_student_list()
                     else:
-                        show_snackbar("Error adding student!", True)
+                        show_snackbar(page, "Error adding student!", True)
                 else:
-                    if update_student(edit_student_id, name_field.value, age, 
+                    if update_student(self.edit_student_id, name_field.value, age,
                                     grade_field.value, class_id):
-                        show_snackbar("Student updated successfully!")
+                        show_snackbar(page, "Student updated successfully!")
                         clear_form()
                         update_student_list()
                     else:
-                        show_snackbar("Error updating student!", True)
+                        show_snackbar(page, "Error updating student!", True)
             except ValueError:
-                show_snackbar("Invalid age value!", True)
-        
+                show_snackbar(page, "Invalid age value!", True)
+
         def confirm_delete_student(student_id: int):
             """Show confirmation dialog for deleting student."""
             def delete_confirmed(e):
                 if delete_student(student_id):
-                    show_snackbar("Student deleted successfully!")
+                    show_snackbar(page, "Student deleted successfully!")
                     update_student_list()
                 else:
-                    show_snackbar("Error deleting student!", True)
+                    show_snackbar(page, "Error deleting student!", True)
                 dialog.open = False
                 page.update()
-            
+
             def cancel_delete(e):
                 dialog.open = False
                 page.update()
-            
+
             dialog = ft.AlertDialog(
                 modal=True,
                 title=ft.Text("Confirm Delete"),
@@ -814,15 +240,15 @@ def main(page: ft.Page):
             page.overlay.append(dialog)
             dialog.open = True
             page.update()
-        
+
         def export_csv(e):
             """Export students to CSV."""
             try:
                 filename = export_students_to_csv()
-                show_snackbar(f"Exported to: {filename}")
+                show_snackbar(page, f"Exported to: {filename}")
             except Exception as ex:
-                show_snackbar(f"Export failed: {str(ex)}", True)
-        
+                show_snackbar(page, f"Export failed: {str(ex)}", True)
+
         def add_class_dialog(e):
             """Show dialog to add new class."""
             class_name_field = ft.TextField(
@@ -830,20 +256,20 @@ def main(page: ft.Page):
                 hint_text="e.g., Grade 10A",
                 autofocus=True,
             )
-            
+
             def save_class(e):
                 if class_name_field.value and add_class(class_name_field.value):
                     load_classes()
-                    show_snackbar("Class added successfully!")
+                    show_snackbar(page, "Class added successfully!")
                     dialog.open = False
                     page.update()
                 else:
-                    show_snackbar("Error adding class! Name might be duplicate.", True)
-            
+                    show_snackbar(page, "Error adding class! Name might be duplicate.", True)
+
             def close_dialog(e):
                 dialog.open = False
                 page.update()
-            
+
             dialog = ft.AlertDialog(
                 modal=True,
                 title=ft.Text("Add New Class"),
@@ -859,11 +285,11 @@ def main(page: ft.Page):
             page.overlay.append(dialog)
             dialog.open = True
             page.update()
-        
+
         # Initialize
         load_classes()
         update_student_list()
-        
+
         # Build view
         return ft.Container(
             content=ft.Column([
@@ -901,7 +327,7 @@ def main(page: ft.Page):
                         ]),
                         ft.Row([
                             ft.ElevatedButton(
-                                "Save Student" if edit_student_id is None else "Update Student",
+                                "Save Student" if self.edit_student_id is None else "Update Student",
                                 icon=ft.Icons.SAVE,
                                 on_click=save_student,
                             ),
@@ -919,7 +345,7 @@ def main(page: ft.Page):
                     content=ft.Column([
                         ft.Text("Students List", size=16, weight=ft.FontWeight.W_500),
                         ft.Container(
-                            content=student_list_view,
+                            content=students_list,
                             expand=True,
                         ),
                     ], spacing=10),
@@ -929,20 +355,124 @@ def main(page: ft.Page):
             ], spacing=0, expand=True),
             expand=True,
         )
-    
-    # Attendance Management View
-    def create_attendance_view():
+
+    def edit_student(self, student: Student, name_field, age_field, grade_field, class_dropdown):
+        """Load student data for editing."""
+        self.edit_student_id = student.id
+        name_field.value = student.name
+        age_field.value = str(student.age)
+        grade_field.value = student.grade
+        class_dropdown.value = str(student.class_id) if student.class_id else None
+
+    def show_attendance_for_student(self, page: ft.Page, student: Student):
+        """Switch to attendance view for specific student."""
+        page.current_view = "attendance"
+        page.selected_student_for_attendance = student.id
+        page.show_main_app()
+
+    def show_fees_for_student(self, page: ft.Page, student: Student):
+        """Switch to fees view for specific student."""
+        page.current_view = "fees"
+        page.selected_student_for_fees = student.id
+        page.show_main_app()
+
+    def update_student_list(self, students_list, search_query=""):
+        """Update student list with optional search."""
+        students = get_all_students(search_query)
+        students_list.controls.clear()
+
+        if not students:
+            students_list.controls.append(
+                ft.Container(
+                    content=ft.Column([
+                        ft.Icon(ft.Icons.INBOX, size=64, color=ft.Colors.GREY_400),
+                        ft.Text("No students found", size=16, color=ft.Colors.GREY_600),
+                    ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                    alignment=ft.alignment.center,
+                    padding=40,
+                )
+            )
+        else:
+            for student in students:
+                students_list.controls.append(
+                    ft.Card(
+                        content=ft.Container(
+                            content=ft.Row([
+                                ft.Container(
+                                    content=ft.CircleAvatar(
+                                        content=ft.Text(
+                                            student.name[0].upper(),
+                                            size=20,
+                                            weight=ft.FontWeight.BOLD,
+                                        ),
+                                        bgcolor=ft.Colors.BLUE_200,
+                                        color=ft.Colors.BLUE_900,
+                                    ),
+                                    width=50,
+                                ),
+                                ft.Column([
+                                    ft.Text(student.name, weight=ft.FontWeight.BOLD, size=16),
+                                    ft.Row([
+                                        ft.Icon(ft.Icons.CAKE, size=16, color=ft.Colors.GREY_600),
+                                        ft.Text(f"{student.age} years", size=12, color=ft.Colors.GREY_600),
+                                        ft.VerticalDivider(width=1),
+                                        ft.Icon(ft.Icons.SCHOOL, size=16, color=ft.Colors.GREY_600),
+                                        ft.Text(f"Grade {student.grade}", size=12, color=ft.Colors.GREY_600),
+                                        ft.VerticalDivider(width=1),
+                                        ft.Icon(ft.Icons.CLASS_, size=16, color=ft.Colors.GREY_600),
+                                        ft.Text(student.class_name or "No class", size=12, color=ft.Colors.GREY_600),
+                                    ], spacing=5),
+                                ], spacing=5, expand=True),
+                                ft.Row([
+                                    ft.IconButton(
+                                        icon=ft.Icons.EDIT,
+                                        icon_color=ft.Colors.BLUE_700,
+                                        tooltip="Edit",
+                                        on_click=lambda e, s=student: self.edit_student(s),
+                                    ),
+                                    ft.IconButton(
+                                        icon=ft.Icons.CALENDAR_TODAY,
+                                        icon_color=ft.Colors.GREEN_700,
+                                        tooltip="Attendance",
+                                        on_click=lambda e, s=student: self.show_attendance_for_student(page, s),
+                                    ),
+                                    ft.IconButton(
+                                        icon=ft.Icons.PAYMENTS,
+                                        icon_color=ft.Colors.ORANGE_700,
+                                        tooltip="Fees",
+                                        on_click=lambda e, s=student: self.show_fees_for_student(page, s),
+                                    ),
+                                    ft.IconButton(
+                                        icon=ft.Icons.DELETE,
+                                        icon_color=ft.Colors.RED_700,
+                                        tooltip="Delete",
+                                    ),
+                                ], spacing=0),
+                            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                            padding=15,
+                        ),
+                    )
+                )
+
+        page.update()
+
+
+class AttendanceView:
+    """Attendance management view."""
+
+    def __init__(self):
+        self.selected_student_for_attendance = None
+
+    def create_view(self, page: ft.Page, current_user: str):
         """Create the attendance management view."""
-        nonlocal selected_student_for_attendance
-        
         student_dropdown = ft.Dropdown(
             label="Select Student",
             hint_text="Choose a student",
             # No icon for dropdown
-            on_change=lambda e: load_attendance_records(),
+            on_change=lambda e: self.load_attendance_records(page, attendance_list, e.control.value),
             expand=True,
         )
-        
+
         date_picker_field = ft.TextField(
             label="Date",
             value=str(date.today()),
@@ -950,7 +480,7 @@ def main(page: ft.Page):
             width=200,
             read_only=True,
         )
-        
+
         status_dropdown = ft.Dropdown(
             label="Status",
             # No icon for dropdown
@@ -962,13 +492,13 @@ def main(page: ft.Page):
             ],
             value="Present",
         )
-        
-        attendance_list_view = ft.ListView(
+
+        attendance_list = ft.ListView(
             spacing=10,
             padding=20,
             expand=True,
         )
-        
+
         def load_students():
             """Load all students into dropdown."""
             students = get_all_students()
@@ -978,30 +508,30 @@ def main(page: ft.Page):
             ]
             if students:
                 student_dropdown.value = str(students[0].id)
-                selected_student_for_attendance = students[0].id
+                self.selected_student_for_attendance = students[0].id
             page.update()
-        
-        def load_attendance_records():
+
+        def load_attendance_records(selected_student_id=None):
             """Load attendance records for selected student."""
-            nonlocal selected_student_for_attendance
-            
-            if not student_dropdown.value:
+            if not selected_student_id and not student_dropdown.value:
                 return
-            
-            selected_student_for_attendance = int(student_dropdown.value)
+
+            student_id = selected_student_id or int(student_dropdown.value)
+            self.selected_student_for_attendance = student_id
+
             start_date = str((date.today() - timedelta(days=30)))
             end_date = str(date.today())
-            
+
             records = get_attendance_for_student(
-                selected_student_for_attendance,
+                student_id,
                 start_date,
                 end_date
             )
-            
-            attendance_list_view.controls.clear()
-            
+
+            attendance_list.controls.clear()
+
             if not records:
-                attendance_list_view.controls.append(
+                attendance_list.controls.append(
                     ft.Container(
                         content=ft.Column([
                             ft.Icon(ft.Icons.EVENT_BUSY, size=64, color=ft.Colors.GREY_400),
@@ -1019,8 +549,8 @@ def main(page: ft.Page):
                         "Absent": ft.Colors.RED_700,
                         "Late": ft.Colors.ORANGE_700,
                     }.get(record.status, ft.Colors.GREY_700)
-                    
-                    attendance_list_view.controls.append(
+
+                    attendance_list.controls.append(
                         ft.Card(
                             content=ft.Container(
                                 content=ft.Row([
@@ -1040,45 +570,43 @@ def main(page: ft.Page):
                         )
                     )
             page.update()
-        
-        def edit_attendance_record(record: AttendanceRecord):
+
+        def edit_attendance_record(record):
             """Edit an attendance record."""
             date_picker_field.value = record.date
             status_dropdown.value = record.status
             page.update()
-        
+
         def save_attendance(e):
             """Save attendance record."""
-            nonlocal selected_student_for_attendance
-            
-            if selected_student_for_attendance is None:
-                show_snackbar("Please select a student!", True)
+            if self.selected_student_for_attendance is None:
+                show_snackbar(page, "Please select a student!", True)
                 return
-            
+
             if not date_picker_field.value or not status_dropdown.value:
-                show_snackbar("Please fill all fields!", True)
+                show_snackbar(page, "Please fill all fields!", True)
                 return
-            
+
             if update_attendance(
-                selected_student_for_attendance,
+                self.selected_student_for_attendance,
                 date_picker_field.value,
                 status_dropdown.value
             ):
-                show_snackbar("Attendance updated successfully!")
+                show_snackbar(page, "Attendance updated successfully!")
                 load_attendance_records()
                 # Reset form
                 date_picker_field.value = str(date.today())
                 status_dropdown.value = "Present"
                 page.update()
             else:
-                show_snackbar("Error updating attendance!", True)
-        
+                show_snackbar(page, "Error updating attendance!", True)
+
         def open_calendar(e):
             """Open date picker dialog."""
             def handle_date_change(e):
                 date_picker_field.value = e.control.value.strftime("%Y-%m-%d")
                 page.update()
-            
+
             date_picker = ft.DatePicker(
                 on_change=handle_date_change,
                 first_date=date(2020, 1, 1),
@@ -1087,15 +615,15 @@ def main(page: ft.Page):
             page.overlay.append(date_picker)
             page.update()
             date_picker.pick_date()
-        
+
         # Make date field clickable to open calendar
         date_picker_field.on_click = open_calendar
-        
+
         # Initialize
         load_students()
         if student_dropdown.value:
             load_attendance_records()
-        
+
         # Build view
         return ft.Container(
             content=ft.Column([
@@ -1125,7 +653,7 @@ def main(page: ft.Page):
                     content=ft.Column([
                         ft.Text("Recent Attendance Records (Last 30 Days)", size=16, weight=ft.FontWeight.W_500),
                         ft.Container(
-                            content=attendance_list_view,
+                            content=attendance_list,
                             expand=True,
                         ),
                     ], spacing=10),
@@ -1135,20 +663,24 @@ def main(page: ft.Page):
             ], spacing=0, expand=True),
             expand=True,
         )
-    
-    # Fees Management View
-    def create_fees_view():
+
+
+class FeesView:
+    """Fees management view."""
+
+    def __init__(self):
+        self.selected_student_for_fees = None
+
+    def create_view(self, page: ft.Page, current_user: str):
         """Create the fees management view."""
-        nonlocal selected_student_for_fees
-        
         student_dropdown = ft.Dropdown(
             label="Select Student",
             hint_text="Choose a student",
             # No icon for dropdown
-            on_change=lambda e: load_fees_records(),
+            on_change=lambda e: self.load_fees_records(page, fees_list, e.control.value),
             expand=True,
         )
-        
+
         amount_field = ft.TextField(
             label="Amount",
             hint_text="Enter amount",
@@ -1156,7 +688,7 @@ def main(page: ft.Page):
             width=150,
             input_filter=ft.NumbersOnlyInputFilter(),
         )
-        
+
         due_date_field = ft.TextField(
             label="Due Date",
             value=str(date.today()),
@@ -1164,20 +696,20 @@ def main(page: ft.Page):
             width=200,
             read_only=True,
         )
-        
+
         description_field = ft.TextField(
             label="Description",
             hint_text="Optional description",
             prefix_icon=ft.Icons.DESCRIPTION,
             expand=True,
         )
-        
-        fees_list_view = ft.ListView(
+
+        fees_list = ft.ListView(
             spacing=10,
             padding=20,
             expand=True,
         )
-        
+
         def load_students():
             """Load all students into dropdown."""
             students = get_all_students()
@@ -1187,23 +719,23 @@ def main(page: ft.Page):
             ]
             if students:
                 student_dropdown.value = str(students[0].id)
-                selected_student_for_fees = students[0].id
+                self.selected_student_for_fees = students[0].id
             page.update()
-        
-        def load_fees_records():
+
+        def load_fees_records(selected_student_id=None):
             """Load fees records for selected student."""
-            nonlocal selected_student_for_fees
-            
-            if not student_dropdown.value:
+            if not selected_student_id and not student_dropdown.value:
                 return
-            
-            selected_student_for_fees = int(student_dropdown.value)
-            records = get_fees_for_student(selected_student_for_fees)
-            
-            fees_list_view.controls.clear()
-            
+
+            student_id = selected_student_id or int(student_dropdown.value)
+            self.selected_student_for_fees = student_id
+
+            records = get_fees_for_student(student_id)
+
+            fees_list.controls.clear()
+
             if not records:
-                fees_list_view.controls.append(
+                fees_list.controls.append(
                     ft.Container(
                         content=ft.Column([
                             ft.Icon(ft.Icons.RECEIPT_LONG, size=64, color=ft.Colors.GREY_400),
@@ -1216,16 +748,16 @@ def main(page: ft.Page):
             else:
                 total_pending = 0
                 total_paid = 0
-                
+
                 for record in records:
                     if record.status == "Paid":
                         total_paid += record.amount
                     else:
                         total_pending += record.amount
-                    
+
                     status_color = ft.Colors.GREEN_700 if record.status == "Paid" else ft.Colors.RED_700
-                    
-                    fees_list_view.controls.append(
+
+                    fees_list.controls.append(
                         ft.Card(
                             content=ft.Container(
                                 content=ft.Column([
@@ -1246,14 +778,14 @@ def main(page: ft.Page):
                                             icon=ft.Icons.PAYMENT,
                                             icon_color=ft.Colors.BLUE_700,
                                             tooltip="Mark as Paid",
-                                            on_click=lambda e, r=record: mark_fee_paid(r),
+                                            on_click=lambda e, r=record: mark_fee_paid(page, r),
                                             disabled=record.status == "Paid",
                                         ),
                                         ft.IconButton(
                                             icon=ft.Icons.DELETE,
                                             icon_color=ft.Colors.RED_700,
                                             tooltip="Delete",
-                                            on_click=lambda e, fid=record.id: confirm_delete_fee(fid),
+                                            on_click=lambda e, fid=record.id: confirm_delete_fee(page, fid),
                                         ),
                                     ], spacing=0),
                                 ], spacing=5),
@@ -1261,9 +793,9 @@ def main(page: ft.Page):
                             ),
                         )
                     )
-                
+
                 # Add summary card
-                fees_list_view.controls.insert(
+                fees_list.controls.insert(
                     0,
                     ft.Card(
                         content=ft.Container(
@@ -1292,30 +824,30 @@ def main(page: ft.Page):
                     )
                 )
             page.update()
-        
-        def mark_fee_paid(record: FeeRecord):
+
+        def mark_fee_paid(record):
             """Mark a fee as paid."""
             if update_fee_status(record.id, "Paid"):
-                show_snackbar("Fee marked as paid!")
+                show_snackbar(page, "Fee marked as paid!")
                 load_fees_records()
             else:
-                show_snackbar("Error updating fee status!", True)
-        
-        def confirm_delete_fee(fee_id: int):
+                show_snackbar(page, "Error updating fee status!", True)
+
+        def confirm_delete_fee(fee_id):
             """Show confirmation dialog for deleting fee."""
             def delete_confirmed(e):
                 if delete_fee_record(fee_id):
-                    show_snackbar("Fee record deleted!")
+                    show_snackbar(page, "Fee record deleted!")
                     load_fees_records()
                 else:
-                    show_snackbar("Error deleting fee record!", True)
+                    show_snackbar(page, "Error deleting fee record!", True)
                 dialog.open = False
                 page.update()
-            
+
             def cancel_delete(e):
                 dialog.open = False
                 page.update()
-            
+
             dialog = ft.AlertDialog(
                 modal=True,
                 title=ft.Text("Confirm Delete"),
@@ -1330,48 +862,46 @@ def main(page: ft.Page):
             page.overlay.append(dialog)
             dialog.open = True
             page.update()
-        
+
         def save_fee(e):
             """Save a new fee record."""
-            nonlocal selected_student_for_fees
-            
-            if selected_student_for_fees is None:
-                show_snackbar("Please select a student!", True)
+            if self.selected_student_for_fees is None:
+                show_snackbar(page, "Please select a student!", True)
                 return
-            
+
             if not amount_field.value or not due_date_field.value:
-                show_snackbar("Amount and Due Date are required!", True)
+                show_snackbar(page, "Amount and Due Date are required!", True)
                 return
-            
+
             try:
                 amount = float(amount_field.value)
                 if amount <= 0:
-                    show_snackbar("Amount must be positive!", True)
+                    show_snackbar(page, "Amount must be positive!", True)
                     return
-                
+
                 if add_fee_record(
-                    selected_student_for_fees,
+                    self.selected_student_for_fees,
                     amount,
                     due_date_field.value,
                     description_field.value
                 ):
-                    show_snackbar("Fee record added successfully!")
+                    show_snackbar(page, "Fee record added successfully!")
                     # Reset form
                     amount_field.value = ""
                     description_field.value = ""
                     due_date_field.value = str(date.today())
                     load_fees_records()
                 else:
-                    show_snackbar("Error adding fee record!", True)
+                    show_snackbar(page, "Error adding fee record!", True)
             except ValueError:
-                show_snackbar("Invalid amount value!", True)
-        
+                show_snackbar(page, "Invalid amount value!", True)
+
         def open_calendar(e):
             """Open date picker dialog."""
             def handle_date_change(e):
                 due_date_field.value = e.control.value.strftime("%Y-%m-%d")
                 page.update()
-            
+
             date_picker = ft.DatePicker(
                 on_change=handle_date_change,
                 first_date=date(2020, 1, 1),
@@ -1380,15 +910,15 @@ def main(page: ft.Page):
             page.overlay.append(date_picker)
             page.update()
             date_picker.pick_date()
-        
+
         # Make date field clickable to open calendar
         due_date_field.on_click = open_calendar
-        
+
         # Initialize
         load_students()
         if student_dropdown.value:
             load_fees_records()
-        
+
         # Build view
         return ft.Container(
             content=ft.Column([
@@ -1419,7 +949,7 @@ def main(page: ft.Page):
                     content=ft.Column([
                         ft.Text("Fee Records", size=16, weight=ft.FontWeight.W_500),
                         ft.Container(
-                            content=fees_list_view,
+                            content=fees_list,
                             expand=True,
                         ),
                     ], spacing=10),
@@ -1429,24 +959,12 @@ def main(page: ft.Page):
             ], spacing=0, expand=True),
             expand=True,
         )
-    
-    # Helper functions for navigation
-    def open_attendance_for_student(student: Student):
-        """Open attendance view for a specific student."""
-        nonlocal current_view, selected_student_for_attendance
-        current_view = "attendance"
-        selected_student_for_attendance = student.id
-        show_main_app()
-    
-    def open_fees_for_student(student: Student):
-        """Open fees view for a specific student."""
-        nonlocal current_view, selected_student_for_fees
-        current_view = "fees"
-        selected_student_for_fees = student.id
-        show_main_app()
-    
-    # Face Enrollment View
-    def create_enrol_face_view():
+
+
+class FaceEnrolView:
+    """Face enrollment view."""
+
+    def create_view(self, page: ft.Page, current_user: str):
         """Create face enrolment view."""
         student_dropdown = ft.Dropdown(
             label="Select Student",
@@ -1474,7 +992,7 @@ def main(page: ft.Page):
         def enrol_student_face():
             """Enrol student face using webcam."""
             if not student_dropdown.value:
-                show_snackbar("Please select a student!", True)
+                show_snackbar(page, "Please select a student!", True)
                 return
 
             student_id = int(student_dropdown.value)
@@ -1497,18 +1015,18 @@ def main(page: ft.Page):
 
                 if len(frames) < 5:
                     status_text.value = "Error: Not enough frames captured. Make sure webcam is working."
-                    show_snackbar("Face enrolment failed!", True)
+                    show_snackbar(page, "Face enrolment failed!", True)
                 else:
                     if FaceService().enrol_student(student_id, frames):
                         status_text.value = "Face enrolled successfully!"
-                        show_snackbar("Face enrolled successfully!")
+                        show_snackbar(page, "Face enrolled successfully!")
                     else:
                         status_text.value = "Error: No face detected. Try again with better lighting."
-                        show_snackbar("Face enrolment failed!", True)
+                        show_snackbar(page, "Face enrolment failed!", True)
 
             except Exception as ex:
                 status_text.value = f"Error: {str(ex)}"
-                show_snackbar("Face enrolment failed!", True)
+                show_snackbar(page, "Face enrolment failed!", True)
 
             page.update()
 
@@ -1547,8 +1065,16 @@ def main(page: ft.Page):
             expand=True,
         )
 
-    # Live Attendance View
-    def create_live_attendance_view():
+
+class LiveAttendanceView:
+    """Live face attendance view."""
+
+    def __init__(self):
+        self.students_present = set()
+        self.attendance_date = str(date.today())
+        self.is_running = False
+
+    def create_view(self, page: ft.Page, current_user: str):
         """Create live face attendance view."""
         image_display = ft.Image(
             src_base64="",
@@ -1569,11 +1095,9 @@ def main(page: ft.Page):
         )
 
         status_text = ft.Text("Click 'Start Live Attendance' to begin", size=14)
-        students_present = set()
-        attendance_date = str(date.today())
-        is_running = False
 
         def start_live_attendance(e):
+            """Start live attendance recognition."""
             nonlocal is_running, students_present
             is_running = True
             students_present = set()
@@ -1583,6 +1107,7 @@ def main(page: ft.Page):
             page.update()
 
             def capture_loop():
+                """Capture loop for live attendance."""
                 nonlocal is_running
                 cap = cv2.VideoCapture(0)
                 if not cap.isOpened():
@@ -1626,6 +1151,7 @@ def main(page: ft.Page):
             threading.Thread(target=capture_loop, daemon=True).start()
 
         def stop_live_attendance(e):
+            """Stop live attendance and save results."""
             nonlocal is_running, students_present, attendance_date
             is_running = False
             start_btn.disabled = False
@@ -1639,7 +1165,7 @@ def main(page: ft.Page):
 
             status_text.value = f"Attendance completed! Marked {marked_count} student(s) as present for {attendance_date}"
             image_display.src_base64 = ""
-            show_snackbar(f"Marked {marked_count} student(s) present")
+            show_snackbar(page, f"Marked {marked_count} student(s) present")
             page.update()
 
         start_btn.on_click = start_live_attendance
@@ -1681,101 +1207,3 @@ def main(page: ft.Page):
             ], spacing=0, expand=True),
             expand=True,
         )
-
-    def show_main_app():
-        """Show the main application interface."""
-        page.controls.clear()
-
-        # Create main layout - FIXED: Proper NavigationRail height handling
-        main_content = None
-        if current_view == "students":
-            main_content = create_student_view()
-        elif current_view == "enrol_face":
-            main_content = create_enrol_face_view()
-        elif current_view == "live_attendance":
-            main_content = create_live_attendance_view()
-        elif current_view == "attendance":
-            main_content = create_attendance_view()
-        elif current_view == "fees":
-            main_content = create_fees_view()
-
-        # FIXED: Use Column with expand instead of trying to set NavigationRail height
-        page.add(
-            create_app_bar(),
-            ft.Row([
-                create_navigation_rail(),
-                ft.VerticalDivider(width=1),
-                ft.Container(
-                    content=main_content,
-                    expand=True,
-                ),
-            ], expand=True)
-        )
-        page.update()
-    
-    def logout(e):
-        """Logout current user."""
-        nonlocal current_user
-        current_user = None
-        show_login()
-    
-    def show_login():
-        """Show login screen."""
-        page.controls.clear()
-        
-        # Use prefix_icon (works in 0.28.3 despite deprecation warning)
-        username_field = ft.TextField(
-            label="Username",
-            prefix_icon=ft.Icons.PERSON,
-            width=300,
-            autofocus=True,
-        )
-        
-        password_field = ft.TextField(
-            label="Password",
-            prefix_icon=ft.Icons.LOCK,
-            password=True,
-            can_reveal_password=True,
-            width=300,
-        )
-        
-        def handle_login(e):
-            nonlocal current_user
-            if authenticate_user(username_field.value, password_field.value):
-                current_user = username_field.value
-                show_main_app()
-            else:
-                show_snackbar("Invalid username or password!", True)
-        
-        page.add(
-            ft.Container(
-                content=ft.Column([
-                    ft.Image(
-                        src="https://cdn-icons-png.flaticon.com/512/2966/2966307.png",
-                        width=100,
-                        height=100,
-                    ),
-                    ft.Text("School Management System", size=24, weight=ft.FontWeight.BOLD),
-                    ft.Divider(height=20),
-                    username_field,
-                    password_field,
-                    ft.ElevatedButton(
-                        "Login",
-                        icon=ft.Icons.LOGIN,
-                        width=300,
-                        on_click=handle_login,
-                    ),
-                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=20),
-                alignment=ft.alignment.center,
-                expand=True,
-            )
-        )
-        page.update()
-    
-    # Initialize database and show login
-    init_db()
-    show_login()
-
-
-if __name__ == "__main__":
-    ft.app(target=main)

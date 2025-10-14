@@ -135,3 +135,11 @@ cython_debug/
 *.sqlite
 *.sqlite3
 school.db
+
+# Refactored modules (keeping original for now during testing)
+# models.py
+# database.py
+# face_service.py
+# utils.py
+# views.py
+# main.py
