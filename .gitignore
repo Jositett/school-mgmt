@@ -152,3 +152,18 @@ logs/
 *.aab
 *.apk
 build/web/
+
+# Project specific - development/test files
+backup/
+storage/
+camera_test.py
+check_cameras.py
+face_detection_test.py
+test_face_enrollment.py
+debug_no_faces.png
+*.db-journal
+
+# Internal docs
+AIGUIDE.md
+.cspell.json
+bootstrap.ps1
