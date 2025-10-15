@@ -3,9 +3,11 @@ from typing import Optional
 
 class Batch:
     """Batch data model."""
-    def __init__(self, id: int, name: str):
+    def __init__(self, id: int, name: str, start_time: str = "", end_time: str = ""):
         self.id = id
         self.name = name
+        self.start_time = start_time
+        self.end_time = end_time
 
 
 class Student:

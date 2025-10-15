@@ -59,7 +59,7 @@ class FaceService:
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             boxes = face_recognition.face_locations(rgb, model="hog")  # type: ignore # or "cnn" if GPU
             if boxes:
-                encodings.append(face_recognition.face_encodings(rgb, boxes)[0])  # type: ignore
+                encodings.append(face_recognition.face_encodings(rgb, boxes, model="small")[0])  # type: ignore - specify small model for 128-dim
         if len(encodings) < 1:
             return False
         mean_encoding = np.mean(encodings, axis=0)                   # simple average
@@ -76,9 +76,17 @@ class FaceService:
         boxes = face_recognition.face_locations(rgb, model="hog")  # type: ignore
         if not boxes:
             return []
-        unknown_encodings = face_recognition.face_encodings(rgb, boxes)  # type: ignore
+        unknown_encodings = face_recognition.face_encodings(rgb, boxes, model="small")  # type: ignore - specify small model for 128-dim
         results = []
         for enc in unknown_encodings:
+            if len(self.known_encodings) == 0:
+                continue  # No known encodings to compare against
+
+            # Ensure encodings are the same size for comparison
+            if len(enc) != len(self.known_encodings[0]):
+                print(f"Encoding size mismatch: unknown={len(enc)}, known={len(self.known_encodings[0])}")
+                continue
+
             distances = face_recognition.face_distance(self.known_encodings, enc)  # type: ignore
             best_idx = np.argmin(distances)
             if distances[best_idx] <= 0.45:          # tune threshold if needed

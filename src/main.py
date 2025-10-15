@@ -11,9 +11,10 @@ from views import (
     create_fees_view,
     create_enrol_face_view,
     create_live_attendance_view,
+    create_admin_view,
 )
 from database import authenticate_user, init_db, get_all_students
-from models import Student, Class, AttendanceRecord, FeeRecord
+from models import *
 from face_service import FaceService
 from utils import export_students_to_csv
 
@@ -61,6 +62,11 @@ def main(page: ft.Page):
                         ),
                         ft.PopupMenuItem(),
                         ft.PopupMenuItem(
+                            text="Database Admin",
+                            icon=ft.Icons.ADMIN_PANEL_SETTINGS,
+                            on_click=lambda e: open_admin_view(),
+                        ),
+                        ft.PopupMenuItem(
                             text="Logout",
                             icon=ft.Icons.LOGOUT,
                             on_click=logout,
@@ -71,6 +77,12 @@ def main(page: ft.Page):
                 ),
             ],
         )
+
+    def open_admin_view():
+        """Open admin/database management view."""
+        nonlocal current_view
+        current_view = "admin"
+        show_main_app()
 
     def create_navigation_rail():
         """Create modern navigation rail."""
@@ -167,6 +179,8 @@ def main(page: ft.Page):
             main_content = create_enrol_face_view(page, show_snackbar)
         elif current_view == "live_attendance":
             main_content = create_live_attendance_view(page, show_snackbar)
+        elif current_view == "admin":
+            main_content = create_admin_view(page, show_snackbar)
         elif current_view == "attendance":
             main_content = create_attendance_view(page, show_snackbar, selected_student_for_attendance)
         elif current_view == "fees":
@@ -237,7 +251,7 @@ def main(page: ft.Page):
             ft.Container(
                 content=ft.Column([
                     ft.Image(
-                        src="https://cdn-icons-png.flaticon.com/512/2966/2966307.png",
+                        src="assets/icon.png",
                         width=min(100, getattr(page.window, 'width', 400) * 0.2),  # Responsive image size
                         height=min(100, getattr(page.window, 'width', 400) * 0.2),
                     ),
@@ -263,5 +277,7 @@ def main(page: ft.Page):
     show_login()
 
 
+logger = None  # Add this for compatibility with web build if needed
+
 if __name__ == "__main__":
-    ft.app(target=main)
+    ft.app(target=main, assets_dir="assets")

@@ -45,7 +45,9 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS batches (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE
+            name TEXT NOT NULL UNIQUE,
+            start_time TEXT,
+            end_time TEXT
         )
     ''')
 
@@ -123,18 +125,18 @@ def get_all_batches() -> List[Batch]:
     """Retrieve all batches from database."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM batches ORDER BY name")
-    batches = [Batch(row['id'], row['name']) for row in cursor.fetchall()]
+    cursor.execute("SELECT id, name, start_time, end_time FROM batches ORDER BY name")
+    batches = [Batch(row['id'], row['name'], row['start_time'] or "", row['end_time'] or "") for row in cursor.fetchall()]
     conn.close()
     return batches
 
 
-def add_batch(name: str) -> bool:
+def add_batch(name: str, start_time: str = "09:00", end_time: str = "17:00") -> bool:
     """Add a new batch to database."""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO batches (name) VALUES (?)", (name,))
+        cursor.execute("INSERT INTO batches (name, start_time, end_time) VALUES (?, ?, ?)", (name, start_time, end_time))
         conn.commit()
         conn.close()
         return True
@@ -397,6 +399,53 @@ def delete_fee_record(fee_id: int) -> bool:
         return True
     except Exception:
         return False
+
+
+def get_student_batch(student_id: int) -> Optional[Batch]:
+    """Get batch information for a specific student."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT b.id, b.name, b.start_time, b.end_time
+        FROM batches b
+        JOIN students s ON s.batch_id = b.id
+        WHERE s.id = ?
+    """, (student_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return Batch(row['id'], row['name'], row['start_time'] or "", row['end_time'] or "")
+    return None
+
+
+def get_current_attendance_status(student_id: int) -> str:
+    """Determine attendance status based on current time and batch schedule."""
+    from datetime import datetime, time
+    batch = get_student_batch(student_id)
+    if not batch or not batch.start_time or not batch.end_time:
+        return "Present"  # Default if no batch times set
+
+    try:
+        # Parse batch times
+        start_time = datetime.strptime(batch.start_time, "%H:%M").time()
+        end_time = datetime.strptime(batch.end_time, "%H:%M").time()
+        current_time = datetime.now().time()
+
+        # Calculate late threshold (30 minutes after start time)
+        from datetime import timedelta
+        late_threshold = datetime.combine(datetime.today(), start_time) + timedelta(minutes=30)
+        late_threshold_time = late_threshold.time()
+
+        if current_time <= start_time:
+            return "Present"  # On time or before start
+        elif start_time < current_time <= late_threshold_time:
+            return "Late"  # Late but within grace period (30 mins)
+        elif late_threshold_time < current_time <= end_time:
+            return "Late"  # Still late if within session time
+        else:
+            return "Absent"  # After session end time
+    except ValueError:
+        return "Present"  # Default on parsing errors
 
 
 def authenticate_user(username: str, password: str) -> bool:

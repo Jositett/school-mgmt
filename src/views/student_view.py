@@ -3,8 +3,7 @@ from datetime import date
 from typing import List, Optional
 from utils import export_students_to_csv
 from database import get_all_batches, add_batch, get_all_classes, add_class, get_all_students, add_student, update_student, delete_student
-from models import Batch
-from models import Student, Class
+from models import Batch, Student, Class
 
 
 def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student_id, open_attendance_for_student, open_fees_for_student):
@@ -19,7 +18,7 @@ def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student
 
     age_field = ft.TextField(
         label="Age",
-        hint_text="5-18",
+        hint_text="1-100 years",
         prefix_icon=ft.Icons.CAKE,
         width=120,
         input_filter=ft.NumbersOnlyInputFilter(),
@@ -174,8 +173,8 @@ def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student
 
         try:
             age = int(age_field.value)
-            if age < 5 or age > 18:
-                show_snackbar("Age must be between 5 and 18!", True)
+            if age < 1 or age > 100:
+                show_snackbar("Age must be between 1 and 100 years!", True)
                 return
 
             batch_id = int(batch_dropdown.value) if batch_dropdown.value else None

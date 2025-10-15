@@ -3,32 +3,100 @@ import cv2
 import base64
 import time
 import threading
+import numpy as np
+import os
 from datetime import date
-from database import get_student_by_id, update_attendance
+from database import get_student_by_id, update_attendance, get_current_attendance_status
+
+# Import face_recognition safely
+import sys
+old_stderr = sys.stderr
+with open(os.devnull, 'w') as devnull:
+    sys.stderr = devnull
+    try:
+        import face_recognition
+        FACE_AVAILABLE = True
+    except ImportError:
+        FACE_AVAILABLE = False
+        face_recognition = None
+sys.stderr = old_stderr
+
 from face_service import FaceService
+
+# 1×1 transparent PNG base64 (valid, tiny)
+PLACEHOLDER_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 
 
 def create_live_attendance_view(page: ft.Page, show_snackbar):
-    """Create live face attendance view."""
+    """Create modern responsive live face attendance view."""
+
+    # Get responsive dimensions
+    window_width = getattr(page.window, 'width', 1200)
+    window_height = getattr(page.window, 'height', 800)
+
+    # Calculate responsive sizes
+    is_mobile = window_width < 768
+
+    # Camera display dimensions
+    if is_mobile:
+        camera_width = min(window_width - 40, 400)  # Max 400px on mobile
+        camera_height = int(camera_width * 0.75)  # 4:3 aspect ratio
+    else:
+        camera_width = min(window_width - 400, 640)  # Leave space for sidebar
+        camera_height = 480
+
     image_display = ft.Image(
-        src_base64="",
-        width=640,
-        height=480,
+        src_base64=PLACEHOLDER_B64,
+        width=camera_width,
+        height=camera_height,
         fit=ft.ImageFit.CONTAIN,
+        border_radius=15,
     )
 
+    # Live attendance status indicator
+    status_indicator = ft.Container(
+        content=ft.Row([
+            ft.Container(
+                width=12,
+                height=12,
+                border_radius=6,
+                bgcolor=ft.Colors.GREY_400,
+            ),
+            ft.Text("Ready", size=14, color=ft.Colors.GREY_600),
+        ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        padding=ft.padding.symmetric(horizontal=15, vertical=8),
+        border_radius=20,
+        bgcolor=ft.Colors.GREY_100,
+    )
+
+    # Recognized students list
+    recognized_list = ft.Column(spacing=8, scroll=ft.ScrollMode.AUTO, height=200)
+
+    status_text = ft.Text("Click 'Start Camera' to begin live attendance", size=14)
+
     start_btn = ft.ElevatedButton(
-        "Start Live Attendance",
+        "Start Camera",
         icon=ft.Icons.PLAY_ARROW,
+        height=50,
+        width=160 if not is_mobile else None,
+        style=ft.ButtonStyle(
+            bgcolor=ft.Colors.GREEN_600,
+            color=ft.Colors.WHITE,
+        ),
     )
 
     stop_btn = ft.ElevatedButton(
-        "Stop & Save Attendance",
+        "Stop & Save",
         icon=ft.Icons.STOP,
         disabled=True,
+        height=50,
+        width=160 if not is_mobile else None,
+        style=ft.ButtonStyle(
+            bgcolor=ft.Colors.RED_600,
+            color=ft.Colors.WHITE,
+        ),
     )
 
-    status_text = ft.Text("Click 'Start Live Attendance' to begin", size=14)
     students_present = set()
     attendance_date = str(date.today())
     is_running = False
@@ -57,23 +125,70 @@ def create_live_attendance_view(page: ft.Page, show_snackbar):
                     break
 
                 # Process every 10th frame to reduce CPU usage
+                current_recognized = []
                 if frame_count % 10 == 0:
-                    faces = FaceService().recognise(frame)
-                    if faces:
-                        new_students = {student_id for student_id, _ in faces}
-                        students_present.update(new_students)
+                    try:
+                        faces = FaceService().recognise(frame)
+                        if faces:
+                            new_students = {student_id for student_id, _ in faces}
+                            students_present.update(new_students)
 
-                        # Update status with recognized students
-                        student_names = []
-                        for sid in new_students:
-                            student = get_student_by_id(sid)
-                            if student:
-                                student_names.append(student.name)
-                        if student_names:
-                            status_text.value = f"Recognized: {', '.join(student_names)}"
+                            # Update status with recognized students and their attendance status
+                            student_info = []
+                            for sid in new_students:
+                                student = get_student_by_id(sid)
+                                if student:
+                                    # Get current attendance status based on time
+                                    attendance_status = get_current_attendance_status(sid)
+                                    student_info.append(f"{student.name} ({attendance_status})")
+                                    current_recognized.append((sid, attendance_status))
+                            if student_info:
+                                status_text.value = f"Recognized: {', '.join(student_info)}"
+                    except Exception as recognition_error:
+                        # Log recognition errors but don't crash the thread
+                        print(f"Face recognition error: {recognition_error}")
+                        pass
 
+                # Draw bounding boxes and labels on frame for visualization
+                display_frame = frame.copy()
+                try:
+                    # Always try to detect faces for visualization if face_recognition is available
+                    if FACE_AVAILABLE and face_recognition:
+                        rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
+                        face_locations = face_recognition.face_locations(rgb, model="hog")
+                        encodings = face_recognition.face_encodings(rgb, face_locations)
+                        face_service = FaceService()
+                        if encodings and hasattr(face_service, 'known_encodings') and face_service.known_encodings:
+                            for (top, right, bottom, left), face_encoding in zip(face_locations, encodings):
+                                # Find best match with low threshold
+                                distances = face_recognition.face_distance(face_service.known_encodings, face_encoding)
+                                best_match_index = np.argmin(distances)
+                                if distances[best_match_index] <= 0.6:  # Slightly higher threshold for visualization
+                                    student_id = face_service.known_ids[best_match_index]
+                                    student = get_student_by_id(student_id)
+                                    if student:
+                                        # Get attendance status for this student
+                                        attendance_status = get_current_attendance_status(student_id)
+
+                                        # Set color based on status
+                                        if attendance_status == "Present":
+                                            color = (0, 255, 0)  # Green
+                                        elif attendance_status == "Late":
+                                            color = (0, 255, 255)  # Yellow
+                                        else:  # Absent
+                                            color = (0, 0, 255)  # Red
+
+                                        # Draw rectangle
+                                        cv2.rectangle(display_frame, (left, top), (right, bottom), color, 2)
+
+                                        # Draw label background and text
+                                        label = f"{student.name}: {attendance_status}"
+                                        cv2.rectangle(display_frame, (left, bottom - 25), (right, bottom), color, cv2.FILLED)
+                                        cv2.putText(display_frame, label, (left + 6, bottom - 6), cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 255), 1)
+                except Exception as viz_error:
+                    print(f"Visualization error: {viz_error}")
                 # Convert frame to base64 for display
-                _, buffer = cv2.imencode('.jpg', frame)
+                _, buffer = cv2.imencode('.jpg', display_frame)
                 image_display.src_base64 = base64.b64encode(buffer).decode()
                 page.update()
 
@@ -91,53 +206,221 @@ def create_live_attendance_view(page: ft.Page, show_snackbar):
         start_btn.disabled = False
         stop_btn.disabled = True
 
-        # Mark attendance for all recognized students
+        # Mark attendance for all recognized students with their current status
         marked_count = 0
         for student_id in students_present:
-            if update_attendance(student_id, attendance_date, "Present"):
+            # Get the current attendance status based on time
+            attendance_status = get_current_attendance_status(student_id)
+            if update_attendance(student_id, attendance_date, attendance_status):
                 marked_count += 1
 
         status_text.value = f"Attendance completed! Marked {marked_count} student(s) as present for {attendance_date}"
-        image_display.src_base64 = ""
+        image_display.src_base64 = PLACEHOLDER_B64  # Reset to placeholder
         show_snackbar(f"Marked {marked_count} student(s) present")
         page.update()
 
     start_btn.on_click = start_live_attendance
     stop_btn.on_click = stop_live_attendance
 
-    return ft.Container(
-        content=ft.Column([
-            ft.Container(
-                content=ft.Text("Live Face Attendance", size=24, weight=ft.FontWeight.BOLD),
-                padding=20,
-            ),
-            ft.Divider(height=1),
-            ft.Container(
-                content=ft.Column([
-                    ft.Container(
+    # Create responsive layout
+    if is_mobile:
+        # Mobile layout - stacked vertically
+        return ft.Container(
+            content=ft.Column([
+                # Header
+                ft.Container(
+                    content=ft.Column([
+                        ft.Text("📹 Live Face Attendance", size=20, weight=ft.FontWeight.BOLD),
+                        status_indicator,
+                    ], spacing=10, alignment=ft.MainAxisAlignment.CENTER),
+                    padding=ft.padding.symmetric(vertical=20),
+                ),
+
+                # Camera display
+                ft.Container(
+                    content=ft.Container(
                         content=image_display,
                         alignment=ft.alignment.center,
-                        padding=20,
+                        bgcolor=ft.Colors.BLACK,
+                        height=camera_height + 20,
+                        border_radius=20,
                     ),
-                    ft.Row([
-                        start_btn,
-                        stop_btn,
-                    ], spacing=15),
-                    status_text,
-                    ft.Container(
-                        content=ft.Column([
-                            ft.Icon(ft.Icons.SECURITY, color=ft.Colors.GREEN_700),
-                            ft.Text("• Only students with enrolled faces will be recognized", size=12),
-                            ft.Text("• Students will be marked as present automatically", size=12),
-                            ft.Text("• Recognition works best with good lighting", size=12),
-                        ], spacing=5),
-                        padding=20,
-                        border=ft.border.all(1, ft.Colors.GREY_300),
-                        border_radius=10,
+                    alignment=ft.alignment.center,
+                    margin=ft.margin.symmetric(horizontal=10),
+                ),
+
+                # Controls section
+                ft.Container(
+                    content=ft.Column([
+                        ft.Container(
+                            content=status_text,
+                            alignment=ft.alignment.center,
+                            padding=ft.padding.symmetric(vertical=10),
+                        ),
+                        ft.Container(
+                            content=ft.Row([
+                                start_btn,
+                                stop_btn,
+                            ], alignment=ft.MainAxisAlignment.CENTER, spacing=20),
+                            alignment=ft.alignment.center,
+                            padding=ft.padding.symmetric(vertical=10),
+                        ),
+                    ], spacing=10),
+                    margin=ft.margin.symmetric(horizontal=20, vertical=10),
+                ),
+
+                # Instructions card
+                ft.Container(
+                    content=ft.Card(
+                        content=ft.Container(
+                            content=ft.Column([
+                                ft.Row([
+                                    ft.Icon(ft.Icons.INFO, color=ft.Colors.BLUE_600),
+                                    ft.Text("Instructions", weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_600),
+                                ], spacing=8),
+                                ft.Text("• Ensure good lighting for best recognition", size=12),
+                                ft.Text("• Face the camera clearly", size=12),
+                                ft.Text("• Students are marked automatically", size=12),
+                                ft.Text("• Green: On time, Yellow: Late, Red: Absent", size=12, color=ft.Colors.GREY_700),
+                                ft.Divider(height=10),
+                                ft.Text("Today: " + attendance_date, size=12, color=ft.Colors.GREY_600),
+                            ], spacing=5),
+                            padding=15,
+                        ),
+                        elevation=2,
                     ),
-                ], spacing=15),
-                padding=20,
-            ),
-        ], spacing=0, expand=True),
-        expand=True,
-    )
+                    margin=ft.margin.symmetric(horizontal=20, vertical=10),
+                ),
+            ], spacing=0, tight=True),
+            expand=True,
+            bgcolor=ft.Colors.SURFACE,
+        )
+    else:
+        # Desktop layout - side by side with sidebar
+        return ft.Container(
+            content=ft.Row([
+                # Main camera area
+                ft.Container(
+                    content=ft.Column([
+                        # Header
+                        ft.Container(
+                            content=ft.Row([
+                                ft.Text("📹 Live Face Attendance", size=24, weight=ft.FontWeight.BOLD),
+                                status_indicator,
+                            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                            padding=ft.padding.symmetric(vertical=20, horizontal=20),
+                        ),
+
+                        # Camera display
+                        ft.Container(
+                            content=ft.Container(
+                                content=image_display,
+                                alignment=ft.alignment.center,
+                                bgcolor=ft.Colors.BLACK,
+                                height=camera_height + 40,
+                                border_radius=20,
+                            ),
+                            alignment=ft.alignment.center,
+                            margin=ft.margin.symmetric(horizontal=20),
+                        ),
+
+                        # Controls and status
+                        ft.Container(
+                            content=ft.Column([
+                                ft.Container(
+                                    content=status_text,
+                                    alignment=ft.alignment.center,
+                                    padding=ft.padding.symmetric(vertical=10),
+                                ),
+                                ft.Container(
+                                    content=ft.Row([
+                                        start_btn,
+                                        stop_btn,
+                                    ], alignment=ft.MainAxisAlignment.CENTER, spacing=20),
+                                    alignment=ft.alignment.center,
+                                ),
+                            ], spacing=15),
+                            margin=ft.margin.symmetric(horizontal=20, vertical=20),
+                        ),
+                    ], spacing=0),
+                    expand=True,
+                ),
+
+                # Sidebar with instructions and info
+                ft.VerticalDivider(width=1),
+                ft.Container(
+                    content=ft.Column([
+                        ft.Container(
+                            content=ft.Text("📋 Session Info", size=18, weight=ft.FontWeight.BOLD),
+                            padding=ft.padding.all(20),
+                        ),
+
+                        # Instructions card
+                        ft.Container(
+                            content=ft.Card(
+                                content=ft.Container(
+                                    content=ft.Column([
+                                        ft.Row([
+                                            ft.Icon(ft.Icons.LIGHT_MODE, color=ft.Colors.AMBER_600),
+                                            ft.Text("Recognition Tips", weight=ft.FontWeight.BOLD, color=ft.Colors.AMBER_700),
+                                        ], spacing=8),
+                                        ft.Text("• Ensure bright, even lighting", size=12),
+                                        ft.Text("• Face camera directly", size=12),
+                                        ft.Text("• Remove glasses/sunglasses", size=12),
+                                        ft.Text("• Keep face steady", size=12),
+                                        ft.Divider(height=15),
+                                        ft.Row([
+                                            ft.Container(width=12, height=12, bgcolor=ft.Colors.GREEN_500, border_radius=6),
+                                            ft.Text("Present (On time)", size=11),
+                                        ], spacing=8),
+                                        ft.Row([
+                                            ft.Container(width=12, height=12, bgcolor=ft.Colors.YELLOW_500, border_radius=6),
+                                            ft.Text("Late (+30 mins)", size=11),
+                                        ], spacing=8),
+                                        ft.Row([
+                                            ft.Container(width=12, height=12, bgcolor=ft.Colors.RED_500, border_radius=6),
+                                            ft.Text("Absent (After session)", size=11),
+                                        ], spacing=8),
+                                    ], spacing=8),
+                                    padding=15,
+                                ),
+                                elevation=2,
+                            ),
+                            margin=ft.margin.symmetric(horizontal=15),
+                        ),
+
+                        # Session info
+                        ft.Container(
+                            content=ft.Card(
+                                content=ft.Container(
+                                    content=ft.Column([
+                                        ft.Row([
+                                            ft.Icon(ft.Icons.CALENDAR_TODAY, color=ft.Colors.BLUE_600),
+                                            ft.Text("Today's Session", weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_600),
+                                        ], spacing=8),
+                                        ft.Text(f"Date: {attendance_date}", size=12),
+                                        ft.Text("Status: Active", size=12, color=ft.Colors.GREEN_600),
+                                        ft.Divider(height=10),
+                                        ft.Text("Students Recognized:", size=12, weight=ft.FontWeight.BOLD),
+                                        ft.Container(
+                                            content=recognized_list,
+                                            height=150,
+                                            bgcolor=ft.Colors.GREY_50,
+                                            border_radius=8,
+                                            padding=10,
+                                        ),
+                                    ], spacing=8),
+                                    padding=15,
+                                ),
+                                elevation=2,
+                            ),
+                            margin=ft.margin.all(15),
+                            expand=True,
+                        ),
+                    ], spacing=0),
+                    width=350,
+                    bgcolor=ft.Colors.SURFACE,
+                ),
+            ], spacing=0),
+            expand=True,
+        )
