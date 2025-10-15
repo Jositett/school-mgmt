@@ -5,7 +5,6 @@ import time
 from database import get_all_students
 import threading
 import numpy as np
-import typing
 from face_service import FaceService
 
 
@@ -26,23 +25,18 @@ def create_enrol_face_view(page: ft.Page, show_snackbar):
     # Camera preview and indicators
     camera_preview = ft.Image(width=320, height=240, fit=ft.ImageFit.CONTAIN)
     camera_status = ft.Text("Camera Status: Not started", size=12, color=ft.Colors.GREY_600)
-
-    # Lighting indicator row
-    lighting_indicator_row = ft.Row([
-        ft.Icon(ft.Icons.LIGHTBULB_OUTLINE, color=ft.Colors.ORANGE_500),
-        ft.Text("Lighting: Unknown", size=12, color=ft.Colors.ORANGE_500)
-    ])
     lighting_indicator = ft.Container(
-        content=lighting_indicator_row,
+        content=ft.Row([
+            ft.Icon(ft.Icons.LIGHTBULB_OUTLINE, color=ft.Colors.ORANGE_500),
+            ft.Text("Lighting: Unknown", size=12, color=ft.Colors.ORANGE_500)
+        ]),
         visible=False
     )
-
-    # Face indicator components
-    face_icon = ft.Icon(ft.Icons.FACE, color=ft.Colors.RED_500)
-    face_text = ft.Text("Face: Not detected", size=12, color=ft.Colors.RED_500)
-    face_indicator_row = ft.Row([face_icon, face_text])
     face_indicator = ft.Container(
-        content=face_indicator_row,
+        content=ft.Row([
+            ft.Icon(ft.Icons.FACE, color=ft.Colors.RED_500),
+            ft.Text("Face: Not detected", size=12, color=ft.Colors.RED_500)
+        ]),
         visible=False
     )
     status_text = ft.Text("", size=14)
@@ -71,13 +65,13 @@ def create_enrol_face_view(page: ft.Page, show_snackbar):
         camera_status.color = ft.Colors.GREEN_600 if frame is not None else ft.Colors.RED_600
 
         if faces_detected > 0:
-            face_text.value = f"Face: Detected ({faces_detected})"
-            face_text.color = ft.Colors.GREEN_600
-            face_icon.color = ft.Colors.GREEN_600
+            face_indicator.content.controls[1].value = f"Face: Detected ({faces_detected})"
+            face_indicator.content.controls[1].color = ft.Colors.GREEN_600
+            face_indicator.content.controls[0].color = ft.Colors.GREEN_600
         else:
-            face_text.value = "Face: Not detected"
-            face_text.color = ft.Colors.RED_500
-            face_icon.color = ft.Colors.RED_500
+            face_indicator.content.controls[1].value = "Face: Not detected"
+            face_indicator.content.controls[1].color = ft.Colors.RED_500
+            face_indicator.content.controls[0].color = ft.Colors.RED_500
 
         # Show indicators
         lighting_indicator.visible = True

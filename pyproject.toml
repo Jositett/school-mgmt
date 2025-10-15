@@ -1,0 +1,22 @@
+[project]
+name    = "SchoolMgmt"
+version = "1.0.0"
+description = "Attendance & fees app by Joedroid"
+authors = ["Josiah L. Tetteh <joedroid@joedroid.com>"]
+
+[tool.flet]
+org  = "com.joedroid"
+product = "SchoolMgmt"
+company = "Joedroid"
+copyright = "© 2025 Joedroid"
+
+[tool.flet.app]
+path = "src"
+
+[tool.flet.android]
+package = "com.joedroid.schoolmgmt"
+split_per_abi = true
+permissions = ["CAMERA","INTERNET"]
+
+[tool.flet.web]
+renderer = "html"

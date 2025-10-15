@@ -109,7 +109,7 @@ def main(page: ft.Page):
                     ],
                     on_change=lambda e: change_view(e.control.selected_index),
                 ),
-                expand=True,
+                height=page.height,  # Fix height issue by setting explicit height
             )
 
     def change_view(index: int):
