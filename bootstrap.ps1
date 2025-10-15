@@ -18,7 +18,7 @@ $root = $PSScriptRoot
 Write-Host "🟦  Joedroid – Boot-strapping Flet project for Android + Web" -ForegroundColor Cyan
 
 # 1.  Folder tree
-@("src","assets","assets/js",".github/workflows") | % {
+@("src","assets","assets/js",".github/workflows") | ForEach-Object {
     New-Item -ItemType Directory -Path "$root\$_" -Force | Out-Null
 }
 

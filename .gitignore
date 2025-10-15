@@ -163,7 +163,9 @@ test_face_enrollment.py
 debug_no_faces.png
 *.db-journal
 
-# Internal docs
+# Internal docs and config
 AIGUIDE.md
 .cspell.json
+
+# Bootstrap script (re-run manually if needed)
 bootstrap.ps1
