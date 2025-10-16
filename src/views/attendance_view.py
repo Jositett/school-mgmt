@@ -45,7 +45,7 @@ def create_attendance_view(page: ft.Page, show_snackbar, selected_student_for_at
         from database import get_all_students
         students = get_all_students()
         student_dropdown.options = [
-            ft.dropdown.Option(key=str(s.id), text=f"{s.name} - Batch {s.batch_name}")
+            ft.dropdown.Option(key=str(s.id), text=f"{s.name} - Class {s.class_name}" if s.class_name else f"{s.name} - No Class Assigned")
             for s in students
         ]
         if students:

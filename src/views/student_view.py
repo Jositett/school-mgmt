@@ -1,8 +1,13 @@
 import flet as ft
+import os
+import sys
 from datetime import date
 from typing import List, Optional
 from utils import export_students_to_csv
 from database import get_all_batches, add_batch, get_all_classes, add_class, get_all_students, add_student, update_student, delete_student
+
+# Add parent directory to path for model imports
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from models import Batch, Student, Class
 
 

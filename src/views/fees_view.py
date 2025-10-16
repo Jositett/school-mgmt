@@ -1,7 +1,13 @@
 import flet as ft
 from datetime import date
-from database import get_fees_for_student, add_fee_record, update_fee_status, delete_fee_record
-from models import FeeRecord
+from database import (
+    get_fees_for_student, add_fee_record, update_fee_status, delete_fee_record,
+    get_all_fee_templates, apply_template_to_batch_students, generate_monthly_fees, generate_annual_fees
+)
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from models import FeeRecord, FeeTemplate
 
 
 def create_fees_view(page: ft.Page, show_snackbar, selected_student_for_fees):
@@ -251,17 +257,116 @@ def create_fees_view(page: ft.Page, show_snackbar, selected_student_for_fees):
     if student_dropdown.value:
         load_fees_records()
 
+    # Fee template quick application buttons
+    template_buttons_view = ft.Container()
+
+    def load_fee_templates():
+        """Load available fee templates for quick application."""
+        templates = [t for t in get_all_fee_templates() if t.is_active and t.frequency == "One-time"]
+
+        if templates:
+            template_buttons = []
+            for template in templates:
+                template_buttons.append(
+                    ft.ElevatedButton(
+                        f"{template.name} (${template.amount:.2f})",
+                        tooltip=f"Apply {template.name} template - {template.description}",
+                        on_click=lambda e, t=template: apply_template_to_student(t, selected_student_for_fees),
+                        style=ft.ButtonStyle(
+                            bgcolor={
+                                'Registration Fee': ft.Colors.BLUE_100,
+                                'Library Fee': ft.Colors.GREEN_100,
+                                'Lab Fee': ft.Colors.ORANGE_100,
+                                'Sports Fee': ft.Colors.RED_100,
+                                'Transport Fee': ft.Colors.PURPLE_100,
+                            }.get(template.name[:12], ft.Colors.GREY_100)
+                        ),
+                    )
+                )
+
+            template_buttons_view.content = ft.Container(
+                content=ft.Column([
+                    ft.Text("Quick Apply Templates", size=14, weight=ft.FontWeight.W_500),
+                    ft.Container(
+                        content=ft.Row(
+                            template_buttons,
+                            wrap=True,
+                            spacing=10,
+                        ),
+                        padding=ft.padding.symmetric(vertical=5)
+                    ),
+                ], spacing=10),
+                padding=ft.padding.symmetric(horizontal=20),
+            )
+        else:
+            template_buttons_view.content = ft.Container(
+                content=ft.Text("No active fee templates available", size=12, color=ft.Colors.GREY_500, italic=True),
+                padding=20,
+            )
+
+        page.update()
+
+    def apply_template_to_student(template, student_id):
+        """Apply a fee template to the selected student."""
+        if not student_id:
+            show_snackbar("Please select a student first!", True)
+            return
+
+        # Check for existing fees from this template
+        existing_fees = get_fees_for_student(student_id)
+        template_fees = [fee for fee in existing_fees if fee.description.startswith(template.name)]
+
+        if template_fees:
+            show_snackbar(f"Fee from '{template.name}' already exists for this student!", True)
+            return
+
+        # Create new fee record from template
+        due_date = date.today().isoformat()
+        if add_fee_record(student_id, template.amount, due_date, template.name):
+            show_snackbar(f"'{template.name}' fee applied successfully!")
+            load_fees_records()
+        else:
+            show_snackbar("Error applying fee template!", True)
+
+    def generate_recurring_fees(e):
+        """Generate monthly and annual fees for all active templates."""
+        monthly_count = len([t for t in get_all_fee_templates() if t.frequency == "Monthly" and t.is_active])
+        annual_count = len([t for t in get_all_fee_templates() if t.frequency == "Annual" and t.is_active])
+
+        if generate_monthly_fees() and generate_annual_fees():
+            show_snackbar(f"Generated recurring fees: {monthly_count} monthly, {annual_count} annual templates processed!")
+
+            # Reload current student's fees
+            if student_dropdown.value:
+                load_fees_records()
+        else:
+            show_snackbar("Error generating recurring fees!", True)
+
+    # Initialize templates after student dropdown is loaded
+    load_fee_templates()
+
     # Build view
     return ft.Container(
         content=ft.Column([
             ft.Container(
-                content=ft.Text("Fees Management", size=24, weight=ft.FontWeight.BOLD),
+                content=ft.Row([
+                    ft.Text("Fees Management", size=24, weight=ft.FontWeight.BOLD),
+                    ft.ElevatedButton(
+                        "Generate Recurring Fees",
+                        icon=ft.Icons.REFRESH,
+                        tooltip="Generate monthly and annual fees for all active templates",
+                        on_click=generate_recurring_fees,
+                        style=ft.ButtonStyle(bgcolor=ft.Colors.BLUE_600),
+                    ),
+                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
                 padding=20,
             ),
             ft.Divider(height=1),
+            template_buttons_view,
+            ft.Divider(height=1),
             ft.Container(
                 content=ft.Column([
-                    ft.Text("Add Fee Record", size=16, weight=ft.FontWeight.W_500),
+                    ft.Text("Add Manual Fee Record", size=16, weight=ft.FontWeight.W_500),
                     student_dropdown,
                     ft.Row([
                         amount_field,

@@ -9,8 +9,8 @@ import numpy as np
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-from database import init_db, get_all_students
-from face_service import FaceService
+from src.database import init_db, get_all_students
+from src.face_service import FaceService
 
 def test_face_encoding_consistency():
     """Test that enrollment and recognition use consistent encoding dimensions."""
