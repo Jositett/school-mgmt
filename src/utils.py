@@ -1,6 +1,6 @@
 import csv
 from datetime import datetime
-from database import get_all_students
+from .database import get_all_students
 
 
 def export_students_to_csv():
