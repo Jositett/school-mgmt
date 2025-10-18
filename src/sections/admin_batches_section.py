@@ -24,30 +24,14 @@ def create_batches_section(page: ft.Page, show_snackbar):
         expand=True,
     )
 
-    start_time_field = ft.TextField(
-        label="Start Time",
-        hint_text="HH:MM",
-        prefix_icon=ft.Icons.SCHEDULE,
-        value="09:00",
-        width=120,
-    )
-
-    end_time_field = ft.TextField(
-        label="End Time",
-        hint_text="HH:MM",
-        prefix_icon=ft.Icons.SCHEDULE,
-        value="17:00",
-        width=120,
-    )
-
     def save_batch(e):
         """Save or update batch."""
-        if not batch_name_field.value or not start_time_field.value or not end_time_field.value:
-            show_snackbar("All fields are required!", True)
+        if not batch_name_field.value:
+            show_snackbar("Batch name is required!", True)
             return
 
         if edit_batch_id is None:
-            if add_batch(batch_name_field.value, start_time_field.value, end_time_field.value):
+            if add_batch(batch_name_field.value):
                 show_snackbar("Batch added successfully!")
                 clear_batch_form()
                 update_batch_list()
@@ -64,9 +48,9 @@ def create_batches_section(page: ft.Page, show_snackbar):
                     conn.close()
                     return
                 cursor.execute("""
-                    UPDATE batches SET name = ?, start_time = ?, end_time = ?
+                    UPDATE batches SET name = ?
                     WHERE id = ?
-                """, (batch_name_field.value, start_time_field.value, end_time_field.value, edit_batch_id))
+                """, (batch_name_field.value, edit_batch_id))
                 if cursor.rowcount > 0:
                     conn.commit()
                     show_snackbar("Batch updated successfully!")
@@ -88,7 +72,7 @@ def create_batches_section(page: ft.Page, show_snackbar):
     # Section-specific search
     search_field = ft.TextField(
         label="Search batches",
-        hint_text="Search by name or time",
+        hint_text="Search by name",
         prefix_icon=ft.Icons.SEARCH,
         expand=True,
         on_change=lambda e: update_batch_list(),
@@ -102,7 +86,7 @@ def create_batches_section(page: ft.Page, show_snackbar):
         batches = get_all_batches()
 
         if query:
-            batches = [b for b in batches if query.lower() in b.name.lower() or query in str(b.start_time) or query in str(b.end_time)]
+            batches = [b for b in batches if query.lower() in b.name.lower()]
 
         batch_list_view.controls.clear()
 
@@ -140,10 +124,7 @@ def create_batches_section(page: ft.Page, show_snackbar):
                                     ft.Row([
                                         ft.Icon(ft.Icons.PEOPLE, size=14, color=ft.Colors.GREY_600),
                                         ft.Text(f"{students_count} students", size=12, color=ft.Colors.GREY_600),
-                                        ft.VerticalDivider(width=1),
-                                        ft.Icon(ft.Icons.SCHEDULE, size=14, color=ft.Colors.GREY_600),
-                                        ft.Text(f"{batch.start_time} - {batch.end_time}", size=12, color=ft.Colors.GREY_600),
-                                    ], spacing=5),
+                                    ]),
                                 ], spacing=5, expand=True),
                                 ft.Row([
                                     ft.IconButton(
@@ -171,8 +152,6 @@ def create_batches_section(page: ft.Page, show_snackbar):
         nonlocal edit_batch_id
         edit_batch_id = batch.id
         batch_name_field.value = batch.name
-        start_time_field.value = batch.start_time
-        end_time_field.value = batch.end_time
         save_button.text = "Update Batch"
         save_button.icon = ft.Icons.UPDATE
         page.update()
@@ -182,8 +161,6 @@ def create_batches_section(page: ft.Page, show_snackbar):
         nonlocal edit_batch_id
         edit_batch_id = None
         batch_name_field.value = ""
-        start_time_field.value = "09:00"
-        end_time_field.value = "17:00"
         save_button.text = "Save Batch"
         save_button.icon = ft.Icons.SAVE
         page.update()
@@ -232,12 +209,10 @@ def create_batches_section(page: ft.Page, show_snackbar):
     def add_batch_quick(e):
         """Quick add batch dialog."""
         name_field = ft.TextField(label="Batch Name", hint_text="e.g., 2025-2026", autofocus=True)
-        start_field = ft.TextField(label="Start Time", value="09:00", width=100)
-        end_field = ft.TextField(label="End Time", value="17:00", width=100)
 
         def save_quick(e):
-            if name_field.value and start_field.value and end_field.value:
-                if add_batch(name_field.value, start_field.value, end_field.value):
+            if name_field.value:
+                if add_batch(name_field.value):
                     update_batch_list()
                     show_snackbar("Batch added successfully!")
                     dlg.open = False
@@ -245,16 +220,13 @@ def create_batches_section(page: ft.Page, show_snackbar):
                 else:
                     show_snackbar("Error adding batch! Name may already exist.", True)
             else:
-                show_snackbar("All fields are required!", True)
+                show_snackbar("Batch name is required!", True)
 
         dlg = ft.AlertDialog(
             modal=True,
             title=ft.Text("Add New Batch"),
             content=ft.Container(
-                content=ft.Column([
-                    name_field,
-                    ft.Row([start_field, end_field], alignment=ft.MainAxisAlignment.CENTER, spacing=10),
-                ], spacing=15, tight=True),
+                content=name_field,
                 width=300,
             ),
             actions=[
@@ -274,7 +246,7 @@ def create_batches_section(page: ft.Page, show_snackbar):
     return ft.Container(
         content=ft.Column([
             ft.Text("Batch Management", size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.ORANGE_700),
-            ft.Text("Manage class batches and schedules", size=12, color=ft.Colors.GREY_600),
+            ft.Text("Manage academic year batches", size=12, color=ft.Colors.GREY_600),
             ft.Divider(),
             search_field,
             ft.Container(
@@ -282,8 +254,6 @@ def create_batches_section(page: ft.Page, show_snackbar):
                     ft.Text("Add / Edit Batch", size=14, weight=ft.FontWeight.W_500),
                     ft.Row([
                         batch_name_field,
-                        start_time_field,
-                        end_time_field,
                         ft.IconButton(
                             icon=ft.Icons.ADD_CIRCLE,
                             icon_color=ft.Colors.ORANGE_700,
