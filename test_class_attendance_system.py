@@ -108,10 +108,10 @@ class TestClassBasedAttendanceSystem(unittest.TestCase):
 
         # Create students with batch and class assignments
         students_data = [
-            ("Alice Johnson", 12, self.batch_ids[0], self.class_ids[0]),  # Morning Batch, Grade 1A
-            ("Bob Smith", 13, self.batch_ids[0], self.class_ids[1]),      # Morning Batch, Grade 1B
-            ("Charlie Brown", 14, self.batch_ids[1], self.class_ids[2]), # Evening Batch, Grade 2A
-            ("Diana Wilson", 12, self.batch_ids[0], self.class_ids[0]),  # Morning Batch, Grade 1A
+            ("Alice Johnson", 12, self.batch_ids[1], self.class_ids[0]),  # Morning Batch, Grade 1A
+            ("Bob Smith", 13, self.batch_ids[1], self.class_ids[1]),      # Morning Batch, Grade 1B
+            ("Charlie Brown", 14, self.batch_ids[0], self.class_ids[2]), # Evening Batch, Grade 2A
+            ("Diana Wilson", 12, self.batch_ids[1], self.class_ids[0]),  # Morning Batch, Grade 1A
         ]
 
         for name, age, batch_id, class_id in students_data:
@@ -189,10 +189,10 @@ class TestClassBasedAttendanceSystem(unittest.TestCase):
         self.assertIsNotNone(alice_id, "Could not find Alice's student ID")
 
         for scenario in test_scenarios:
-            with patch('database.datetime') as mock_datetime:
-                # Mock current time
-                mock_time = time.fromisoformat(scenario["time"])
-                mock_datetime.now.return_value = datetime.combine(date.today(), mock_time)
+            # Mock current time
+            mock_time = time.fromisoformat(scenario["time"])
+            mock_datetime = datetime.combine(date.today(), mock_time)
+            with patch('database.datetime.now', return_value=mock_datetime):
 
                 status = get_current_attendance_status(alice_id)
                 self.assertEqual(
@@ -303,7 +303,7 @@ class TestClassBasedAttendanceSystem(unittest.TestCase):
 
             # Verify view structure
             self.assertIsNotNone(view)
-            self.assertEqual(view.content.controls[0].content, "Attendance Management")
+            self.assertEqual(view.content.controls[0].content.value, "Attendance Management")
 
             # Load students (simulate dropdown)
             students = get_all_students()
@@ -392,8 +392,8 @@ class TestClassBasedAttendanceSystem(unittest.TestCase):
         update_student(legacy_student_id, "Legacy Student", 16, 1, class_id)
 
         # Test attendance status uses class time
-        with patch('database.datetime') as mock_datetime:
-            mock_datetime.now.return_value = datetime.combine(date.today(), time(9, 15))  # 15 min late
+        mock_datetime_now = datetime.combine(date.today(), time(9, 15))  # 15 min late
+        with patch('database.datetime.now', return_value=mock_datetime_now):
             status = get_current_attendance_status(legacy_student_id)
             self.assertEqual(status, "Late", "Migration failed: attendance status not using class times")
 

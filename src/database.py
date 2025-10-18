@@ -163,30 +163,15 @@ def init_db():
     except sqlite3.OperationalError:
         pass  # Column already exists
 
-    # Migration: Remove start_time and end_time columns from batches table if they exist
-    # Note: SQLite doesn't support DROP COLUMN, so we need to recreate the table
-    # Check if old columns exist
-    cursor.execute("PRAGMA table_info(batches)")
-    columns = cursor.fetchall()
-    old_columns = [col[1] for col in columns if col[1] in ['start_time', 'end_time']]
-
-    if old_columns:
-        # Rename table temporarily
-        cursor.execute("ALTER TABLE batches RENAME TO batches_old")
-
-        # Create new table without the old columns
-        cursor.execute('''
-            CREATE TABLE batches (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE
-            )
-        ''')
-
-        # Copy data (excluding the old columns)
-        cursor.execute("INSERT INTO batches (id, name) SELECT id, name FROM batches_old")
-
-        # Drop old table
-        cursor.execute("DROP TABLE batches_old")
+    # Migration: Remove old time columns from batches table if they exist (migration to class-based)
+    try:
+        cursor.execute("ALTER TABLE batches DROP COLUMN start_time")
+    except sqlite3.OperationalError:
+        pass  # Column doesn't exist
+    try:
+        cursor.execute("ALTER TABLE batches DROP COLUMN end_time")
+    except sqlite3.OperationalError:
+        pass  # Column doesn't exist
 
     # Create default admin user
     cursor.execute("SELECT * FROM users WHERE username = 'admin'")
@@ -210,12 +195,12 @@ def get_all_batches() -> List[Batch]:
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT id, name FROM batches ORDER BY name")
-    batches = [Batch(row['id'], row['name']) for row in cursor.fetchall()]
+    batches = [Batch(row['id'], row['name'], "", "") for row in cursor.fetchall()]
     conn.close()
     return batches
 
 
-def add_batch(name: str) -> bool:
+def add_batch(name: str, start_time: str = "", end_time: str = "") -> bool:
     """Add a new batch to database."""
     try:
         conn = get_db_connection()
@@ -505,11 +490,10 @@ def get_all_fee_templates() -> List[FeeTemplate]:
             row['amount'],
             row['frequency'],
             row['batch_id'],
-            row['is_active'] == 1,
+            row['batch_name'] or "All Batches",
+            bool(row['is_active']),
             row['created_at'] or ""
         )
-        # Add batch name dynamically
-        template.batch_name = row['batch_name'] or "All Batches"
         templates.append(template)
     conn.close()
     return templates
@@ -807,7 +791,7 @@ def get_student_batch(student_id: int) -> Optional[Batch]:
     row = cursor.fetchone()
     conn.close()
     if row:
-        return Batch(row['id'], row['name'])
+        return Batch(row['id'], row['name'], "", "")
     return None
 
 
