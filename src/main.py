@@ -42,7 +42,7 @@ def main(page: ft.Page):
 
     # State variables
     current_user = None
-    edit_student_id = None
+    edit_student_id_container = [None]  # Use list to make it mutable
     current_view = "admin"
     selected_student_for_attendance = None
     selected_student_for_fees = None
@@ -96,7 +96,7 @@ def main(page: ft.Page):
                 page,
                 show_snackbar,
                 current_view,
-                edit_student_id,
+                edit_student_id_container,
                 open_attendance_for_student,
                 open_fees_for_student,
             )

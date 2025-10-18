@@ -11,7 +11,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from models import Batch, Student, Class
 
 
-def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student_id, open_attendance_for_student, open_fees_for_student):
+def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student_id_container, open_attendance_for_student, open_fees_for_student):
     """Create the student management view."""
     # Form fields - Use prefix_icon (works in 0.28.3 despite deprecation warning)
     name_field = ft.TextField(
@@ -155,7 +155,7 @@ def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student
 
     def edit_student(student: Student):
         """Load student data for editing."""
-        edit_student_id = student.id
+        edit_student_id_container[0] = student.id
         name_field.value = student.name
         age_field.value = str(student.age)
         batch_dropdown.value = str(student.batch_id) if student.batch_id else None
@@ -164,7 +164,7 @@ def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student
 
     def clear_form():
         """Clear all form fields."""
-        edit_student_id = None
+        edit_student_id_container[0] = None
         name_field.value = ""
         age_field.value = ""
         load_batches()
@@ -185,7 +185,7 @@ def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student
             batch_id = int(batch_dropdown.value) if batch_dropdown.value else None
             class_id = int(class_dropdown.value) if class_dropdown.value else None
 
-            if edit_student_id is None:
+            if edit_student_id_container[0] is None:
                 if add_student(name_field.value, age, batch_id, class_id):
                     show_snackbar("Student added successfully!")
                     clear_form()
@@ -193,7 +193,7 @@ def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student
                 else:
                     show_snackbar("Error adding student!", True)
             else:
-                if update_student(edit_student_id, name_field.value, age,
+                if update_student(edit_student_id_container[0], name_field.value, age,
                                 batch_id, class_id):
                     show_snackbar("Student updated successfully!")
                     clear_form()
@@ -362,7 +362,7 @@ def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student
                     ]),
                     ft.Row([
                         ft.ElevatedButton(
-                            "Save Student" if edit_student_id is None else "Update Student",
+                            "Save Student" if edit_student_id_container[0] is None else "Update Student",
                             icon=ft.Icons.SAVE,
                             on_click=save_student,
                         ),
