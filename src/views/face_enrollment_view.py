@@ -8,13 +8,9 @@ import numpy as np
 import os
 from datetime import date
 
-# Try to use the fast JS-based face service, fall back to dlib if unavailable
-try:
-    from face_service_js import FaceServiceJS as FaceService
-    print("Using fast JavaScript-based face recognition")
-except Exception as e:
-    print(f"JS face service unavailable ({e}), using fallback dlib service")
-    from face_service import FaceService  # slow but works
+# Use the fast JS-based face service (no dlib dependency)
+from face_service_js import FaceServiceJS as FaceService
+print("Using fast OpenCV+JavaScript face recognition (no dlib dependency)")
 
 # Thread-safe resources
 camera_lock = threading.Lock()

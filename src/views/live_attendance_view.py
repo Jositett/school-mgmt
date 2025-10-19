@@ -21,13 +21,9 @@ with open(os.devnull, 'w') as devnull:
         face_recognition = None
 sys.stderr = old_stderr
 
-# Try to use the fast JS-based face service, fall back to dlib if unavailable
-try:
-    from face_service_js import FaceServiceJS as FaceService
-    print("Using fast JavaScript-based face recognition for attendance")
-except Exception as e:
-    print(f"JS face service unavailable ({e}), using fallback dlib service")
-    from face_service import FaceService  # slow but works
+# Use the fast JS-based face service (no dlib dependency)
+from face_service_js import FaceServiceJS as FaceService
+print("Using fast OpenCV+JavaScript face recognition for attendance (no dlib dependency)")
 
 # 1×1 transparent PNG base64 (valid, tiny)
 PLACEHOLDER_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="

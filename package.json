@@ -1,0 +1,26 @@
+{
+  "name": "school-management",
+  "version": "1.0.0",
+  "description": "Offline attendance & fees app for Ghana schools.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Jositett/school-mgmt.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Jositett/school-mgmt/issues"
+  },
+  "homepage": "https://github.com/Jositett/school-mgmt#readme",
+  "dependencies": {
+    "@mediapipe/face_mesh": "^0.4.1633559619"
+  }
+}
