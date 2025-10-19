@@ -163,6 +163,18 @@ test_face_enrollment.py
 debug_no_faces.png
 *.db-journal
 
+# Node.js / NPM (for JS face recognition models)
+node_modules/
+package-lock.json
+
+# JavaScript model files (can be regenerated)
+js_models/face_mesh_solution_wasm/
+# Keep js_models/face-api.min.js and js_models/face_js_bundle.js as they're committed
+
+# Debug/comprehensive test files
+debug_db.py
+comprehensive_scheduling_test_report.md
+
 # Internal docs and config
 AIGUIDE.md
 .cspell.json

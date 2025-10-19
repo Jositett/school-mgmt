@@ -46,6 +46,7 @@ class FaceService:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._load_encodings()
+            cls._instance.cleanup_invalid_encodings()  # Clean up any invalid encodings on startup
         return cls._instance
 
     # ---------- public API ----------
@@ -82,15 +83,43 @@ class FaceService:
             if len(self.known_encodings) == 0:
                 continue  # No known encodings to compare against
 
-            # Ensure encodings are the same size for comparison
-            if len(enc) != len(self.known_encodings[0]):
-                print(f"Encoding size mismatch: unknown={len(enc)}, known={len(self.known_encodings[0])}")
+            # Ensure both encoding and known encodings are 1D and same size
+            enc = np.array(enc, dtype=np.float32).flatten()  # Ensure 1D array
+
+            # Validate encoding size (should be 128 for small model)
+            if len(enc) != 128:
+                print(f"Invalid encoding size: {len(enc)}, expected 128. Skipping.")
                 continue
 
-            distances = face_recognition.face_distance(self.known_encodings, enc)  # type: ignore
-            best_idx = np.argmin(distances)
-            if distances[best_idx] <= 0.45:          # tune threshold if needed
-                results.append((self.known_ids[best_idx], float(distances[best_idx])))
+            # Filter known encodings to ensure they're valid 128-dim vectors
+            valid_known_encodings = []
+            valid_known_ids = []
+
+            for i, known_enc in enumerate(self.known_encodings):
+                known_enc_flat = np.array(known_enc, dtype=np.float32).flatten()
+                if len(known_enc_flat) == 128:  # Valid size
+                    valid_known_encodings.append(known_enc_flat)
+                    valid_known_ids.append(self.known_ids[i])
+                else:
+                    print(f"Invalid stored encoding for student {self.known_ids[i]}: size {len(known_enc_flat)}")
+
+            if not valid_known_encodings:
+                continue  # No valid stored encodings
+
+            try:
+                # Convert to numpy array for consistent shape
+                known_encodings_array = np.array(valid_known_encodings, dtype=np.float32)
+
+                # Compute distances
+                distances = face_recognition.face_distance(known_encodings_array, enc)  # type: ignore
+
+                # Find best match
+                best_idx = np.argmin(distances)
+                if distances[best_idx] <= 0.45:  # tune threshold if needed
+                    results.append((valid_known_ids[best_idx], float(distances[best_idx])))
+            except ValueError as ve:
+                print(f"Face recognition error during distance calculation: {ve} - skipping comparison")
+
         return results
 
     # ---------- internal ----------
@@ -107,4 +136,31 @@ class FaceService:
             "INSERT OR REPLACE INTO face_encodings(student_id, encoding, updated_at) VALUES (?,?,?)",
             (student_id, enc.tobytes(), datetime.now().isoformat()))
         conn.commit()
+        conn.close()
+
+    def cleanup_invalid_encodings(self):
+        """Remove or fix invalid encodings in the database."""
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute("SELECT student_id, encoding FROM face_encodings").fetchall()
+
+        invalid_count = 0
+        for student_id, encoding_bytes in rows:
+            try:
+                enc = np.frombuffer(encoding_bytes, dtype=np.float32)
+                if len(enc) != 128:
+                    print(f"Cleaning up invalid encoding for student {student_id}: {len(enc)} dimensions")
+                    # Delete invalid encoding - user will need to re-enroll
+                    conn.execute("DELETE FROM face_encodings WHERE student_id = ?", (student_id,))
+                    invalid_count += 1
+            except Exception as e:
+                print(f"Error processing encoding for student {student_id}: {e}")
+                conn.execute("DELETE FROM face_encodings WHERE student_id = ?", (student_id,))
+                invalid_count += 1
+
+        if invalid_count > 0:
+            conn.commit()
+            print(f"Cleaned up {invalid_count} invalid face encodings")
+            # Refresh in-memory cache
+            self._load_encodings()
+
         conn.close()

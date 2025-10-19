@@ -21,7 +21,13 @@ with open(os.devnull, 'w') as devnull:
         face_recognition = None
 sys.stderr = old_stderr
 
-from face_service import FaceService
+# Try to use the fast JS-based face service, fall back to dlib if unavailable
+try:
+    from face_service_js import FaceServiceJS as FaceService
+    print("Using fast JavaScript-based face recognition for attendance")
+except Exception as e:
+    print(f"JS face service unavailable ({e}), using fallback dlib service")
+    from face_service import FaceService  # slow but works
 
 # 1×1 transparent PNG base64 (valid, tiny)
 PLACEHOLDER_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
@@ -160,33 +166,78 @@ def create_live_attendance_view(page: ft.Page, show_snackbar):
                         face_service = FaceService()
                         if encodings and hasattr(face_service, 'known_encodings') and face_service.known_encodings:
                             for (top, right, bottom, left), face_encoding in zip(face_locations, encodings):
-                                # Find best match with low threshold
-                                distances = face_recognition.face_distance(face_service.known_encodings, face_encoding)
-                                best_match_index = np.argmin(distances)
-                                if distances[best_match_index] <= 0.6:  # Slightly higher threshold for visualization
-                                    student_id = face_service.known_ids[best_match_index]
-                                    student = get_student_by_id(student_id)
-                                    if student:
-                                        # Get attendance status for this student
-                                        attendance_status = get_current_attendance_status(student_id)
+                                try:
+                                    # Validate encoding size and filter known encodings
+                                    face_encoding_flat = np.array(face_encoding, dtype=np.float32).flatten()
+                                    if len(face_encoding_flat) != 128:
+                                        continue
 
-                                        # Set color based on status
-                                        if attendance_status == "Present":
-                                            color = (0, 255, 0)  # Green
-                                        elif attendance_status == "Late":
-                                            color = (0, 255, 255)  # Yellow
-                                        else:  # Absent
-                                            color = (0, 0, 255)  # Red
+                                    # Filter known encodings to valid 128-dim vectors
+                                    valid_known_encodings = []
+                                    valid_known_ids = []
 
-                                        # Draw rectangle
-                                        cv2.rectangle(display_frame, (left, top), (right, bottom), color, 2)
+                                    for i, known_enc in enumerate(face_service.known_encodings):
+                                        known_enc_flat = np.array(known_enc, dtype=np.float32).flatten()
+                                        # Ensure exactly 128 dimensions, truncate or pad if necessary
+                                        if len(known_enc_flat) != 128:
+                                            if len(known_enc_flat) > 128:
+                                                # Truncate to 128 dims
+                                                known_enc_flat = known_enc_flat[:128]
+                                                print(f"Truncated encoding for student {face_service.known_ids[i]} from {len(known_enc_flat)} to 128 dims")
+                                            elif len(known_enc_flat) > 0:
+                                                # Pad with zeros to 128 dims
+                                                padded = np.zeros(128, dtype=np.float32)
+                                                padded[:len(known_enc_flat)] = known_enc_flat
+                                                known_enc_flat = padded
+                                                print(f"Padded encoding for student {face_service.known_ids[i]} from {len(known_enc_flat)} to 128 dims")
+                                            else:
+                                                continue  # Skip completely invalid encodings
 
-                                        # Draw label background and text
-                                        label = f"{student.name}: {attendance_status}"
-                                        cv2.rectangle(display_frame, (left, bottom - 25), (right, bottom), color, cv2.FILLED)
-                                        cv2.putText(display_frame, label, (left + 6, bottom - 6), cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 255), 1)
+                                        valid_known_encodings.append(known_enc_flat)
+                                        valid_known_ids.append(face_service.known_ids[i])
+
+                                    if not valid_known_encodings:
+                                        continue
+
+                                    # Ensure consistent 2D array shape (n, 128)
+                                    try:
+                                        known_encodings_array = np.array(valid_known_encodings, dtype=np.float32)
+                                        # Force reshape to (n, 128) if necessary
+                                        if known_encodings_array.ndim == 1:
+                                            known_encodings_array = known_encodings_array.reshape(1, -1)
+                                        elif known_encodings_array.shape[1] != 128:
+                                            known_encodings_array = known_encodings_array[:, :128]  # Truncate
+                                    except Exception as shape_error:
+                                        print(f"Failed to reshape known encodings array: {shape_error}")
+                                        continue
+                                    distances = face_recognition.face_distance(known_encodings_array, face_encoding_flat)
+                                    best_match_index = np.argmin(distances)
+                                    if distances[best_match_index] <= 0.6:  # Slightly higher threshold for visualization
+                                        student_id = valid_known_ids[best_match_index]
+                                        student = get_student_by_id(student_id)
+                                        if student:
+                                            # Get attendance status for this student
+                                            attendance_status = get_current_attendance_status(student_id)
+
+                                            # Set color based on status
+                                            if attendance_status == "Present":
+                                                color = (0, 255, 0)  # Green
+                                            elif attendance_status == "Late":
+                                                color = (0, 255, 255)  # Yellow
+                                            else:  # Absent
+                                                color = (0, 0, 255)  # Red
+
+                                            # Draw rectangle
+                                            cv2.rectangle(display_frame, (left, top), (right, bottom), color, 2)
+
+                                            # Draw label background and text
+                                            label = f"{student.name}: {attendance_status}"
+                                            cv2.rectangle(display_frame, (left, bottom - 25), (right, bottom), color, cv2.FILLED)
+                                            cv2.putText(display_frame, label, (left + 6, bottom - 6), cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 255), 1)
+                                except ValueError as ve:
+                                    print(f"Face visualization distance calculation error: {ve}")
                 except Exception as viz_error:
-                    print(f"Visualization error: {viz_error}")
+                    print(f"Face recognition visualization error: {viz_error}")
                 # Convert frame to base64 for display
                 _, buffer = cv2.imencode('.jpg', display_frame)
                 image_display.src_base64 = base64.b64encode(buffer).decode()

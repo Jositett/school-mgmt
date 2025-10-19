@@ -7,7 +7,22 @@ import threading
 import numpy as np
 import os
 from datetime import date
-from face_service import FaceService
+
+# Try to use the fast JS-based face service, fall back to dlib if unavailable
+try:
+    from face_service_js import FaceServiceJS as FaceService
+    print("Using fast JavaScript-based face recognition")
+except Exception as e:
+    print(f"JS face service unavailable ({e}), using fallback dlib service")
+    from face_service import FaceService  # slow but works
+
+# Thread-safe resources
+camera_lock = threading.Lock()
+enrollment_in_progress = threading.Event()
+
+# Thread control for preview
+preview_thread = None
+stop_preview = threading.Event()
 
 # Import face_recognition safely
 import sys
@@ -60,18 +75,6 @@ def create_enrol_face_view(page: ft.Page, show_snackbar):
         expand=is_mobile,
     )
 
-    capture_btn = ft.ElevatedButton(
-        "Start Webcam Enrollment",
-        icon=ft.Icons.VIDEOCAM,
-        height=50,
-        width=180 if not is_mobile else None,
-        style=ft.ButtonStyle(
-            bgcolor=ft.Colors.BLUE_600,
-            color=ft.Colors.WHITE,
-        ),
-        on_click=lambda e: enrol_student_face(),
-    )
-
     # Live enrollment status indicator - status dot and text
     status_dot = ft.Container(
         width=12,
@@ -101,14 +104,6 @@ def create_enrol_face_view(page: ft.Page, show_snackbar):
     )
     camera_status = ft.Text("Camera Status: Not started", size=12, color=ft.Colors.GREY_600)
 
-    start_preview_btn = ft.ElevatedButton(
-        "Start Camera Preview",
-        icon=ft.Icons.VIDEOCAM_OUTLINED,
-        height=50,
-        width=180 if not is_mobile else None,
-        on_click=lambda e: start_camera_preview(),
-    )
-
     # Lighting indicator row
     lighting_indicator_row = ft.Row([
         ft.Icon(ft.Icons.LIGHTBULB_OUTLINE, color=ft.Colors.ORANGE_500),
@@ -129,26 +124,74 @@ def create_enrol_face_view(page: ft.Page, show_snackbar):
     )
     status_text = ft.Text("", size=14)
 
+    # Now define the actual implementations
+    def test_enrollment():
+        """Quick test to verify enrollment components work"""
+        print("=== Testing Face Enrollment ===")
+
+        # Test 1: Check if students are loaded
+        students = get_all_students()
+        print(f"Students found: {len(students)}")
+
+        # Test 2: Check camera access
+        cap = cv2.VideoCapture(0)
+        if cap.isOpened():
+            print("Camera 0 accessible")
+            ret, frame = cap.read()
+            if ret:
+                print("Can read frames from camera")
+            else:
+                print("Cannot read frames from camera")
+            cap.release()
+        else:
+            print("Camera 0 not accessible")
+
+        # Test 3: Check FaceService
+        try:
+            face_service = FaceService()
+            print("FaceService created successfully")
+        except Exception as e:
+            print(f"FaceService error: {e}")
+
+    # Run this test when the view loads
+    test_enrollment()
+
     def load_students():
         """Load students into dropdown."""
         students = get_all_students()
+        print(f"Loaded {len(students)} students")  # Debug print
         student_dropdown.options = [
             ft.dropdown.Option(key=str(s.id), text=s.name) for s in students
         ]
         if students:
             student_dropdown.value = str(students[0].id)
+            print(f"Selected student: {students[0].name}")  # Debug print
 
     def load_camera_devices():
         """Load available camera devices into dropdown."""
         available_cameras = []
-        for i in range(10):  # Check first 10 camera indices
-            try:
-                cap = cv2.VideoCapture(i)
-                if cap.isOpened():
-                    available_cameras.append(i)
-                    cap.release()
-            except Exception:
-                pass
+
+        # Suppress OpenCV stderr during camera detection
+        old_stderr = os.dup(2)  # Duplicate stderr file descriptor
+        devnull = os.open(os.devnull, os.O_WRONLY)
+
+        try:
+            # Redirect stderr to /dev/null to suppress OpenCV errors
+            os.dup2(devnull, 2)
+
+            for i in range(10):  # Check first 10 camera indices
+                try:
+                    cap = cv2.VideoCapture(i)
+                    if cap.isOpened():
+                        available_cameras.append(i)
+                        cap.release()
+                except Exception:
+                    pass
+        finally:
+            # Restore stderr
+            os.dup2(old_stderr, 2)
+            os.close(old_stderr)
+            os.close(devnull)
 
         camera_dropdown.options = [
             ft.dropdown.Option(key=str(i), text=f"Camera {i}") for i in available_cameras
@@ -160,164 +203,317 @@ def create_enrol_face_view(page: ft.Page, show_snackbar):
 
     def update_camera_preview(frame, faces_detected=0):
         """Update camera preview with frame and face detection indicators."""
-        if frame is not None:
-            # Convert BGR to RGB and encode as base64 for Flet
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            success, encoded_img = cv2.imencode('.png', rgb_frame)
-            if success:
-                img_base64 = base64.b64encode(encoded_img.tobytes()).decode('utf-8')
-                camera_preview.src_base64 = img_base64
+        async def update():
+            if frame is not None:
+                # Convert BGR to RGB and encode as base64 for Flet
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                success, encoded_img = cv2.imencode('.png', rgb_frame)
+                if success:
+                    img_base64 = base64.b64encode(encoded_img.tobytes()).decode('utf-8')
+                    camera_preview.src_base64 = img_base64
 
-        # Update indicators
-        camera_status.value = "Camera Status: Active" if frame is not None else "Camera Status: Error"
-        camera_status.color = ft.Colors.GREEN_600 if frame is not None else ft.Colors.RED_600
+            # Update indicators
+            camera_status.value = "Camera Status: Active" if frame is not None else "Camera Status: Error"
+            camera_status.color = ft.Colors.GREEN_600 if frame is not None else ft.Colors.RED_600
 
-        if faces_detected > 0:
-            face_text.value = f"Face: Detected ({faces_detected})"
-            face_text.color = ft.Colors.GREEN_600
-            face_icon.color = ft.Colors.GREEN_600
-        else:
-            face_text.value = "Face: Not detected"
-            face_text.color = ft.Colors.RED_500
-            face_icon.color = ft.Colors.RED_500
+            if faces_detected > 0:
+                face_text.value = f"Face: Detected ({faces_detected})"
+                face_text.color = ft.Colors.GREEN_600
+                face_icon.color = ft.Colors.GREEN_600
+            else:
+                face_text.value = "Face: Not detected"
+                face_text.color = ft.Colors.RED_500
+                face_icon.color = ft.Colors.RED_500
 
-        # Show indicators
-        lighting_indicator.visible = True
-        face_indicator.visible = True
+            # Show indicators
+            lighting_indicator.visible = True
+            face_indicator.visible = True
 
-        page.update()
+            page.update()
+
+        page.run_task(update)
 
     def camera_preview_thread():
         """Thread to continuously update camera preview."""
-        selected_camera = int(camera_dropdown.value or 0)
-        cap = cv2.VideoCapture(selected_camera)
+        with camera_lock:
+            selected_camera = int(camera_dropdown.value or 0)
+            cap = cv2.VideoCapture(selected_camera)
 
-        if not cap.isOpened():
-            update_camera_preview(None, 0)
-            return
+            if not cap.isOpened():
+                update_camera_preview(None, 0)
+                return
 
-        try:
-            import face_recognition
-        except ImportError:
-            face_recognition = None
+            try:
+                import face_recognition
+            except ImportError:
+                face_recognition = None
 
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
+            try:
+                while not stop_preview.is_set():
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
 
-            faces_detected = 0
-            if face_recognition is not None:
-                try:
-                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    face_locations = face_recognition.face_locations(rgb_frame, model="hog")
-                    faces_detected = len(face_locations)
-                except Exception:
-                    pass
+                    faces_detected = 0
+                    if face_recognition is not None:
+                        try:
+                            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                            face_locations = face_recognition.face_locations(rgb_frame, model="hog")
+                            faces_detected = len(face_locations)
+                        except Exception:
+                            pass
 
-            update_camera_preview(frame, faces_detected)
-            time.sleep(0.5)  # Update every 500ms
-
-        cap.release()
+                    update_camera_preview(frame, faces_detected)
+                    time.sleep(0.5)  # Update every 500ms
+            finally:
+                cap.release()
 
     def start_camera_preview():
         """Start camera preview thread."""
+        global preview_thread
+        # Stop existing preview if running
+        if preview_thread and preview_thread.is_alive():
+            stop_preview.set()
+            preview_thread.join(timeout=1.0)  # Wait up to 1 second for thread to stop
+
+        # Reset stop signal and start new preview
+        stop_preview.clear()
         camera_status.value = "Camera Status: Starting..."
         camera_status.color = ft.Colors.ORANGE_500
         page.update()
 
-        threading.Thread(target=camera_preview_thread, daemon=True).start()
+        preview_thread = threading.Thread(target=camera_preview_thread, daemon=True)
+        preview_thread.start()
 
     def enrol_student_face():
-        """Enrol student face using webcam."""
+        """Enrol student face using webcam with clear user guidance."""
+        print("Enroll button clicked!")  # Debug print
+        if enrollment_in_progress.is_set():
+            show_snackbar("Enrollment already in progress!", True)
+            return
+
         if not student_dropdown.value:
             show_snackbar("Please select a student!", True)
             return
 
-        student_id = int(student_dropdown.value)
-        status_text.value = "Capturing face data... Keep face in view."
-        status_dot.bgcolor = ft.Colors.ORANGE_500
-        status_text_display.value = "Capturing"
-        status_text_display.color = ft.Colors.ORANGE_700
-        page.update()
-
-        try:
-            selected_camera = int(camera_dropdown.value or 0)
-            cap = cv2.VideoCapture(selected_camera)
-            if not cap.isOpened():
-                status_text.value = "Error: Cannot access camera. Check camera permissions and hardware."
-                status_text_display.value = "Camera Error"
-                status_dot.bgcolor = ft.Colors.RED_500
-                status_text_display.color = ft.Colors.RED_700
-                show_snackbar("Camera access failed!", True)
-                page.update()
-                return
-
-            frames = []
-            faces_detected = 0
-            start_time = time.time()
-
-            # Capture frames with real-time feedback
-            while len(frames) < 15 and (time.time() - start_time) < 5:  # Max 5 seconds
-                ret, frame = cap.read()
-                if not ret:
-                    break
-
-                # Check for faces in real-time for feedback
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                if FACE_AVAILABLE and face_recognition:
-                    try:
-                        face_locations = face_recognition.face_locations(rgb_frame, model="hog")
-                        if len(face_locations) > 0:
-                            faces_detected = len(face_locations)
-                            frames.append(frame.copy())
-                    except Exception:
-                        pass
-                else:
-                    frames.append(frame.copy())
-
-                status_text.value = f"Capturing... Frame {len(frames)}/15 (faces: {faces_detected})"
-                time.sleep(0.2)  # 200ms intervals
-
-            cap.release()
-
-            if len(frames) < 5:
-                status_text.value = "Error: Not enough frames captured. Camera may be busy or not responding."
-                status_dot.bgcolor = ft.Colors.RED_500
-                status_text_display.value = "Failed"
-                status_text_display.color = ft.Colors.RED_700
-                show_snackbar("Face enrolment failed!", True)
+        # Force stop any camera preview before starting enrollment
+        global preview_thread
+        if preview_thread and preview_thread.is_alive():
+            print("Forcing stop of existing preview thread...")  # Debug print
+            stop_preview.set()
+            # Give it a moment to stop
+            preview_thread.join(timeout=2.0)
+            if preview_thread.is_alive():
+                print("Warning: Preview thread did not stop gracefully")  # Debug print
             else:
-                # Check if FaceService is available
-                try:
-                    face_service = FaceService()
-                    if face_service.enrol_student(student_id, frames):
-                        status_text.value = f"Face enrolled successfully! Used {len(frames)} frames."
-                        status_dot.bgcolor = ft.Colors.GREEN_500
-                        status_text_display.value = "Success"
-                        status_text_display.color = ft.Colors.GREEN_700
-                        show_snackbar("Face enrolled successfully!")
+                print("Preview thread stopped successfully")  # Debug print
+
+        # Reset the stop flag for future use
+        stop_preview.clear()
+
+        print("Starting enrollment...")  # Debug print
+        # Start enrollment in a background thread to avoid blocking the UI
+        enrollment_in_progress.set()
+        threading.Thread(target=_do_enrollment, daemon=True).start()
+
+    def _do_enrollment():
+        """Background enrollment function that handles all blocking operations."""
+        try:
+            print("Enrollment thread started")  # Debug print
+
+            # Try to acquire camera lock with timeout, then fall back to stopping preview
+            lock_acquired = camera_lock.acquire(timeout=3.0)  # Wait max 3 seconds
+
+            if not lock_acquired:
+                print("Could not acquire camera lock, trying to stop preview thread...")  # Debug print
+                # Try one more time to stop preview if running
+                global preview_thread
+                if preview_thread and preview_thread.is_alive():
+                    stop_preview.set()
+                    preview_thread.join(timeout=1.0)
+
+                # Now try to get the lock again
+                lock_acquired = camera_lock.acquire(timeout=2.0)
+            if not lock_acquired:
+                print("Failed to acquire camera lock after stopping preview")  # Debug print
+                raise Exception("Cannot access camera - another process may be using it")
+
+            print("Camera lock acquired successfully")  # Debug print
+
+            # Get student ID from dropdown
+            assert student_dropdown.value is not None
+            student_id = int(student_dropdown.value)
+
+            # Update UI for starting
+            def update_ui(message, dot_color, text_color, status_value):
+                async def _update():
+                    status_text.value = message
+                    status_dot.bgcolor = dot_color
+                    status_text_display.value = status_value
+                    status_text_display.color = text_color
+                    page.update()
+                page.run_task(_update)
+
+            update_ui("⚠️ Get ready! Look directly at the camera with your face fully visible.",
+                      ft.Colors.ORANGE_500, ft.Colors.ORANGE_700, "Starting")
+
+            # Pause for 2 seconds to let user prepare
+            time.sleep(2)
+
+            update_ui("🔴 Recording... KEEP FACE STEADY: 3",
+                      ft.Colors.RED_500, ft.Colors.RED_700, "Recording")
+            time.sleep(1)
+
+            update_ui("🔴 Recording... KEEP FACE STEADY: 2",
+                      ft.Colors.RED_500, ft.Colors.RED_700, "Recording")
+            time.sleep(1)
+
+            update_ui("🔴 Recording... KEEP FACE STEADY: 1",
+                      ft.Colors.RED_500, ft.Colors.RED_700, "Recording")
+            time.sleep(1)
+
+            update_ui("📷 Recording... Keep your face steady and visible!",
+                      ft.Colors.RED_500, ft.Colors.RED_700, "Recording")
+
+            try:
+                # Add this check
+                if not camera_dropdown.value:
+                    update_ui("❌ No camera selected!", ft.Colors.RED_500, ft.Colors.RED_700, "Camera Error")
+                    show_snackbar("No camera selected!", True)
+                    return
+
+                selected_camera = int(camera_dropdown.value)
+                print(f"Attempting to access camera {selected_camera}")  # Debug print
+                cap = cv2.VideoCapture(selected_camera)
+
+                if not cap.isOpened():
+                    print(f"Failed to open camera {selected_camera}")  # Debug print
+                    update_ui(f"❌ Cannot access camera {selected_camera}. Check camera permissions and hardware.",
+                             ft.Colors.RED_500, ft.Colors.RED_700, "Camera Error")
+                    show_snackbar(f"Cannot access camera {selected_camera}!", True)
+                    return
+
+                frames = []
+                faces_detected = 0
+                frame_count = 0
+                start_time = time.time()
+
+                # Capture frames with real-time feedback and clear instructions
+                while len(frames) < 15 and (time.time() - start_time) < 8:  # Extended to 8 seconds
+                    ret, frame = cap.read()
+                    if not ret:
+                        continue
+
+                    frame_count += 1
+                    remaining_seconds = int(8 - (time.time() - start_time))
+
+                    # Check for faces
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    current_faces = 0
+                    if FACE_AVAILABLE and face_recognition:
+                        try:
+                            face_locations = face_recognition.face_locations(rgb_frame, model="hog")
+                            current_faces = len(face_locations)
+                        except Exception:
+                            pass
+
+                    # Always capture frames if face recognition is disabled
+                    # Only capture face frames if face recognition is enabled
+                    should_capture = True
+                    if FACE_AVAILABLE and face_recognition and current_faces == 0:
+                        should_capture = False
+
+                    if should_capture:
+                        frames.append(frame.copy())
+                        faces_detected = max(faces_detected, current_faces)
+
+                    # Update progress message with clear instructions
+                    captured_frames = len(frames)
+                    progress_text = ""
+
+                    if captured_frames < 5:
+                        progress_text = f"⏳ Getting frames... {captured_frames}/15 ({remaining_seconds}s left) - Keep face steady!"
+
+                        if current_faces == 0 and FACE_AVAILABLE:
+                            progress_text += " FACE NOT DETECTED!"
+
+                    elif captured_frames < 10:
+                        progress_text = f"🟡 Good progress... {captured_frames}/15 ({remaining_seconds}s left) - Keep face steady!"
+
+                    elif captured_frames < 15:
+                        progress_text = f"🟢 Almost done... {captured_frames}/15 ({remaining_seconds}s left) - Keep face steady!"
+
                     else:
-                        status_text.value = "Error: No face detected. Ensure good lighting and face is clearly visible."
-                        status_dot.bgcolor = ft.Colors.RED_500
-                        status_text_display.value = "No Face"
-                        status_text_display.color = ft.Colors.RED_700
-                        show_snackbar("Face enrolment failed!", True)
-                except Exception as service_ex:
-                    status_text.value = f"Error: Face recognition service failed - {str(service_ex)}"
-                    status_dot.bgcolor = ft.Colors.RED_500
-                    status_text_display.value = "Error"
-                    status_text_display.color = ft.Colors.RED_700
-                    show_snackbar("Face recognition service error!", True)
+                        progress_text = "✅ Capture complete! Processing..."
 
-        except Exception as ex:
-            status_text.value = f"Error: Camera operation failed - {str(ex)}"
-            status_dot.bgcolor = ft.Colors.RED_500
-            status_text_display.value = "Error"
-            status_text_display.color = ft.Colors.RED_700
-            show_snackbar("Camera operation failed!", True)
+                    status_text.value = progress_text
+                    page.update()
+                    time.sleep(0.3)  # 300ms intervals for better capture rate
 
-        page.update()
+                cap.release()
+
+                if len(frames) < 5:
+                    update_ui("❌ Not enough frames captured! Try again - keep face steady in camera view during countdown.",
+                             ft.Colors.RED_500, ft.Colors.RED_700, "Failed")
+                    show_snackbar("Face enrolment failed! Keep face steady during recording.", True)
+                else:
+                    update_ui("🔄 Processing captured frames...",
+                             ft.Colors.BLUE_600, ft.Colors.BLUE_600, "Processing")
+                    page.update()
+
+                    # Check if FaceService is available
+                    try:
+                        print("Initializing FaceService...")  # Debug print
+                        face_service = FaceService()
+                        print("FaceService initialized successfully")  # Debug print
+
+                        print(f"Enrolling student ID {student_id} with {len(frames)} frames")  # Debug print
+                        if face_service.enrol_student(student_id, frames):
+                            print("Face enrollment successful")  # Debug print
+                            update_ui(f"✅ Success! Face enrolled using {len(frames)} frames.",
+                                     ft.Colors.GREEN_500, ft.Colors.GREEN_700, "Success")
+                            show_snackbar("Face enrolled successfully! 🎉")
+                        else:
+                            print("Face enrollment failed - no face detected")  # Debug print
+                            update_ui("❌ No face detected in captured frames. Try again with better lighting and clear face view.",
+                                     ft.Colors.RED_500, ft.Colors.RED_700, "No Face")
+                            show_snackbar("No face detected! Ensure good lighting and clear face view.", True)
+                    except Exception as service_ex:
+                        print(f"FaceService error: {str(service_ex)}")  # Debug print
+                        update_ui(f"❌ Face recognition service error: {str(service_ex)}",
+                                 ft.Colors.RED_500, ft.Colors.RED_700, "Error")
+                        show_snackbar("Face recognition service error!", True)
+            except Exception as ex:
+                update_ui(f"❌ Camera operation failed: {str(ex)}",
+                         ft.Colors.RED_500, ft.Colors.RED_700, "Error")
+                show_snackbar("Camera operation failed!", True)
+        except Exception as thread_ex:
+            print(f"Enrollment thread error: {thread_ex}")
+            show_snackbar("Enrollment failed due to unexpected error!", True)
+        finally:
+            camera_lock.release()
+            enrollment_in_progress.clear()
+
+    # Create buttons now that functions are defined
+    capture_btn = ft.ElevatedButton(
+        "Start Webcam Enrollment",
+        icon=ft.Icons.VIDEOCAM,
+        height=50,
+        width=180 if not is_mobile else None,
+        style=ft.ButtonStyle(
+            bgcolor=ft.Colors.BLUE_600,
+            color=ft.Colors.WHITE,
+        ),
+        on_click=lambda e: (print("Button clicked!"), enrol_student_face())[1],  # Debug print
+    )
+
+    start_preview_btn = ft.ElevatedButton(
+        "Start Camera Preview",
+        icon=ft.Icons.VIDEOCAM_OUTLINED,
+        height=50,
+        width=180 if not is_mobile else None,
+        on_click=lambda e: start_camera_preview(),
+    )
 
     load_students()
     load_camera_devices()

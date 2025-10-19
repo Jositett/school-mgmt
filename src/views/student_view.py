@@ -98,18 +98,18 @@ def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student
                     ft.Card(
                         content=ft.Container(
                             content=ft.Row([
-                                ft.Container(
-                                    content=ft.CircleAvatar(
-                                        content=ft.Text(
-                                            student.name[0].upper(),
-                                            size=20,
-                                            weight=ft.FontWeight.BOLD,
+                                    ft.Container(
+                                        content=ft.CircleAvatar(
+                                            content=ft.Text(
+                                                student.name[0].upper(),
+                                                size=20,
+                                                weight=ft.FontWeight.BOLD,
+                                            ),
+                                            bgcolor=ft.Colors.BLUE_GREY_100,
+                                            color=ft.Colors.BLACK,
                                         ),
-                                        bgcolor=ft.Colors.BLUE_200,
-                                        color=ft.Colors.BLUE_900,
+                                        width=50,
                                     ),
-                                    width=50,
-                                ),
                                 ft.Column([
                                     ft.Text(student.name, weight=ft.FontWeight.BOLD, size=16),
                                     ft.Row([
@@ -126,25 +126,25 @@ def create_student_view(page: ft.Page, show_snackbar, current_view, edit_student
                                 ft.Row([
                                     ft.IconButton(
                                         icon=ft.Icons.EDIT,
-                                        icon_color=ft.Colors.BLUE_700,
+                                        icon_color=ft.Colors.BLUE,
                                         tooltip="Edit",
                                         on_click=lambda e, s=student: edit_student(s),
                                     ),
                                     ft.IconButton(
                                         icon=ft.Icons.CALENDAR_TODAY,
-                                        icon_color=ft.Colors.GREEN_700,
+                                        icon_color=ft.Colors.ORANGE,
                                         tooltip="Attendance",
                                         on_click=lambda e, s=student: open_attendance_for_student(s),
                                     ),
                                     ft.IconButton(
                                         icon=ft.Icons.PAYMENTS,
-                                        icon_color=ft.Colors.ORANGE_700,
+                                        icon_color=ft.Colors.GREEN,
                                         tooltip="Fees",
                                         on_click=lambda e, s=student: open_fees_for_student(s),
                                     ),
                                     ft.IconButton(
                                         icon=ft.Icons.DELETE,
-                                        icon_color=ft.Colors.RED_700,
+                                        icon_color=ft.Colors.RED,
                                         tooltip="Delete",
                                         on_click=lambda e, sid=student.id: confirm_delete_student(sid),
                                     ),

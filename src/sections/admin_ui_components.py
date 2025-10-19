@@ -242,7 +242,8 @@ def create_day_selector(page: ft.Page):
             for i, (_, bv, _) in enumerate(self.days):
                 self.checkboxes[i].value = (self.current_bitmask & bv) != 0
             self.bitmask_display.value = f"Bitmask: {self.current_bitmask}"
-            self.page.update()
+            if self.page is not None:
+                self.page.update()
 
         def select_weekdays(self, e):
             """Select Monday through Friday."""
@@ -275,7 +276,8 @@ def create_day_selector(page: ft.Page):
             for i, (_, bv, _) in enumerate(self.days):
                 self.checkboxes[i].value = (self.current_bitmask & bv) != 0
             self.bitmask_display.value = f"Bitmask: {self.current_bitmask}"
-            self.page.update()
+            if self.page is not None:
+                self.page.update()
 
     return DaySelector()
 
