@@ -200,17 +200,18 @@ def get_all_batches() -> List[Batch]:
     return batches
 
 
-def add_batch(name: str, start_time: str = "", end_time: str = "") -> bool:
+def add_batch(name: str, start_time: str = "", end_time: str = "") -> Optional[int]:
     """Add a new batch to database."""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("INSERT INTO batches (name) VALUES (?)", (name,))
+        batch_id = cursor.lastrowid
         conn.commit()
         conn.close()
-        return True
+        return batch_id
     except sqlite3.IntegrityError:
-        return False
+        return None
 
 
 def get_all_classes() -> List[Class]:
@@ -223,17 +224,18 @@ def get_all_classes() -> List[Class]:
     return classes
 
 
-def add_class(name: str, start_time: str = "", end_time: str = "", start_date: Optional[str] = None, end_date: Optional[str] = None, recurrence_pattern: int = 127) -> bool:
+def add_class(name: str, start_time: str = "", end_time: str = "", start_date: Optional[str] = None, end_date: Optional[str] = None, recurrence_pattern: int = 127) -> Optional[int]:
     """Add a new class to database."""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("INSERT INTO classes (name, start_time, end_time, start_date, end_date, recurrence_pattern) VALUES (?, ?, ?, ?, ?, ?)", (name, start_time, end_time, start_date, end_date, recurrence_pattern))
+        class_id = cursor.lastrowid
         conn.commit()
         conn.close()
-        return True
+        return class_id
     except sqlite3.IntegrityError:
-        return False
+        return None
 
 
 def get_all_students(search_query: str = "") -> List[Student]:
@@ -305,7 +307,7 @@ def get_student_by_id(student_id: int) -> Optional[Student]:
     return None
 
 
-def add_student(name: str, age: int, batch_id: Optional[int] = None, class_id: Optional[int] = None) -> bool:
+def add_student(name: str, age: int, batch_id: Optional[int] = None, class_id: Optional[int] = None) -> Optional[int]:
     """Add a new student to database."""
     try:
         conn = get_db_connection()
@@ -314,11 +316,12 @@ def add_student(name: str, age: int, batch_id: Optional[int] = None, class_id: O
             "INSERT INTO students (name, age, batch_id, class_id) VALUES (?, ?, ?, ?)",
             (name, age, batch_id, class_id)
         )
+        student_id = cursor.lastrowid
         conn.commit()
         conn.close()
-        return True
+        return student_id
     except Exception:
-        return False
+        return None
 
 
 def update_student(student_id: int, name: str, age: int,

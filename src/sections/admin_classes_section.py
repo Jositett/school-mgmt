@@ -7,6 +7,7 @@ This module provides the classes management interface with CRUD operations.
 import flet as ft
 import sqlite3
 from database import get_all_classes, add_class, get_all_students
+from sections.admin_ui_components import create_day_selector, create_date_range_picker
 
 
 # Utility functions for class scheduling display
@@ -62,12 +63,15 @@ def create_classes_section(page: ft.Page, show_snackbar):
     # State variables
     edit_class_id = None
 
+    # Day selector and date range picker components
+    day_selector = create_day_selector(page)
+    date_range_picker = create_date_range_picker(page)
+
     # Form fields
     class_name_field = ft.TextField(
         label="Class Name",
         hint_text="e.g., Grade 10A",
         prefix_icon=ft.Icons.CLASS_,
-        expand=True,
     )
 
     start_time_field = ft.TextField(
@@ -194,6 +198,11 @@ def create_classes_section(page: ft.Page, show_snackbar):
         class_name_field.value = cls.name
         start_time_field.value = cls.start_time
         end_time_field.value = cls.end_time
+
+        # Set scheduling values
+        day_selector.set_bitmask(cls.recurrence_pattern or 127)
+        date_range_picker.set_dates(cls.start_date, cls.end_date)
+
         page.update()
 
     def clear_class_form():
@@ -203,6 +212,11 @@ def create_classes_section(page: ft.Page, show_snackbar):
         class_name_field.value = ""
         start_time_field.value = "09:00"
         end_time_field.value = "15:00"
+
+        # Reset scheduling components to defaults
+        day_selector.set_bitmask(127)  # Default to all days
+        date_range_picker.clear_dates()  # Clear date ranges
+
         page.update()
 
     def save_class(e):
@@ -211,8 +225,12 @@ def create_classes_section(page: ft.Page, show_snackbar):
             show_snackbar("All fields are required!", True)
             return
 
+        # Get scheduling values
+        recurrence_pattern = day_selector.get_bitmask()
+        start_date, end_date = date_range_picker.get_selected_dates()
+
         if edit_class_id is None:
-            if add_class(class_name_field.value, start_time_field.value, end_time_field.value):
+            if add_class(class_name_field.value, start_time_field.value, end_time_field.value, start_date, end_date, recurrence_pattern):
                 show_snackbar("Class added successfully!")
                 clear_class_form()
                 update_class_list()
@@ -229,9 +247,9 @@ def create_classes_section(page: ft.Page, show_snackbar):
                     conn.close()
                     return
                 cursor.execute("""
-                    UPDATE classes SET name = ?, start_time = ?, end_time = ?
+                    UPDATE classes SET name = ?, start_time = ?, end_time = ?, start_date = ?, end_date = ?, recurrence_pattern = ?
                     WHERE id = ?
-                """, (class_name_field.value, start_time_field.value, end_time_field.value, edit_class_id))
+                """, (class_name_field.value, start_time_field.value, end_time_field.value, start_date, end_date, recurrence_pattern, edit_class_id))
                 if cursor.rowcount > 0:
                     conn.commit()
                     show_snackbar("Class updated successfully!")
@@ -346,6 +364,8 @@ def create_classes_section(page: ft.Page, show_snackbar):
                             on_click=add_class_quick,
                         ),
                     ]),
+                    day_selector,
+                    date_range_picker,
                     ft.Row([
                         ft.ElevatedButton(
                             "Save Class" if edit_class_id is None else "Update Class",
