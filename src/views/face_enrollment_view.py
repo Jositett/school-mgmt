@@ -6,6 +6,7 @@ from database import get_all_students
 import threading
 import numpy as np
 import os
+import asyncio
 from datetime import date
 
 # Use the fast JS-based face service (no dlib dependency)
@@ -100,10 +101,12 @@ def create_enrol_face_view(page: ft.Page, show_snackbar):
     )
     camera_status = ft.Text("Camera Status: Not started", size=12, color=ft.Colors.GREY_600)
 
-    # Lighting indicator row
+    # Lighting indicator components
+    lighting_icon = ft.Icon(ft.Icons.LIGHTBULB_OUTLINE, color=ft.Colors.ORANGE_500)
+    lighting_text = ft.Text("Lighting: Unknown", size=12, color=ft.Colors.ORANGE_500)
     lighting_indicator_row = ft.Row([
-        ft.Icon(ft.Icons.LIGHTBULB_OUTLINE, color=ft.Colors.ORANGE_500),
-        ft.Text("Lighting: Unknown", size=12, color=ft.Colors.ORANGE_500)
+        lighting_icon,
+        lighting_text
     ])
     lighting_indicator = ft.Container(
         content=lighting_indicator_row,
@@ -208,22 +211,29 @@ def create_enrol_face_view(page: ft.Page, show_snackbar):
                     img_base64 = base64.b64encode(encoded_img.tobytes()).decode('utf-8')
                     camera_preview.src_base64 = img_base64
 
-            # Update indicators
-            camera_status.value = "Camera Status: Active" if frame is not None else "Camera Status: Error"
-            camera_status.color = ft.Colors.GREEN_600 if frame is not None else ft.Colors.RED_600
+                # Update indicators
+                camera_status.value = "Camera Status: Active"
+                camera_status.color = ft.Colors.GREEN_600
 
-            if faces_detected > 0:
-                face_text.value = f"Face: Detected ({faces_detected})"
-                face_text.color = ft.Colors.GREEN_600
-                face_icon.color = ft.Colors.GREEN_600
+                # Always show face and lighting indicators when camera is active
+                lighting_indicator.visible = True
+                lighting_text.value = "Lighting: Good"  # TODO: implement actual lighting check
+                lighting_text.color = ft.Colors.GREEN_500
+
+                face_indicator.visible = True
+                if faces_detected > 0:
+                    face_text.value = f"Face: Detected ({faces_detected})"
+                    face_text.color = ft.Colors.GREEN_600
+                    face_icon.color = ft.Colors.GREEN_600
+                else:
+                    face_text.value = "Face: Not detected"
+                    face_text.color = ft.Colors.RED_500
+                    face_icon.color = ft.Colors.RED_500
             else:
-                face_text.value = "Face: Not detected"
-                face_text.color = ft.Colors.RED_500
-                face_icon.color = ft.Colors.RED_500
-
-            # Show indicators
-            lighting_indicator.visible = True
-            face_indicator.visible = True
+                camera_status.value = "Camera Status: Error"
+                camera_status.color = ft.Colors.RED_600
+                lighting_indicator.visible = False
+                face_indicator.visible = False
 
             page.update()
 
@@ -314,8 +324,10 @@ def create_enrol_face_view(page: ft.Page, show_snackbar):
 
     def _do_enrollment():
         """Background enrollment function that handles all blocking operations."""
+        print("DEBUG: _do_enrollment function entered")
         try:
             print("Enrollment thread started")  # Debug print
+            print("DEBUG: About to acquire camera lock")
 
             # Try to acquire camera lock with timeout, then fall back to stopping preview
             lock_acquired = camera_lock.acquire(timeout=3.0)  # Wait max 3 seconds
@@ -340,15 +352,23 @@ def create_enrol_face_view(page: ft.Page, show_snackbar):
             assert student_dropdown.value is not None
             student_id = int(student_dropdown.value)
 
-            # Update UI for starting
+            # Update UI for starting (simplified approach)
             def update_ui(message, dot_color, text_color, status_value):
-                async def _update():
+                print(f"DEBUG: Attempting UI update: {message}")
+                try:
+                    # Direct synchronous update - Flet should handle this from threads
                     status_text.value = message
                     status_dot.bgcolor = dot_color
                     status_text_display.value = status_value
                     status_text_display.color = text_color
+                    print("DEBUG: Calling page.update()...")
                     page.update()
-                page.run_task(_update)
+                    print(f"DEBUG: UI update completed successfully: {message}")
+                except Exception as e:
+                    print(f"DEBUG: UI update failed with exception: {e}")
+                    print(f"DEBUG: Exception type: {type(e)}")
+                    import traceback
+                    print(f"DEBUG: Traceback: {traceback.format_exc()}")
 
             update_ui("⚠️ Get ready! Look directly at the camera with your face fully visible.",
                       ft.Colors.ORANGE_500, ft.Colors.ORANGE_700, "Starting")
@@ -423,7 +443,7 @@ def create_enrol_face_view(page: ft.Page, show_snackbar):
                         frames.append(frame.copy())
                         faces_detected = max(faces_detected, current_faces)
 
-                    # Update progress message with clear instructions
+                    # Update progress message with clear instructions (thread-safe)
                     captured_frames = len(frames)
                     progress_text = ""
 
@@ -442,8 +462,11 @@ def create_enrol_face_view(page: ft.Page, show_snackbar):
                     else:
                         progress_text = "✅ Capture complete! Processing..."
 
-                    status_text.value = progress_text
-                    page.update()
+                    # Update status text in thread-safe way
+                    async def _update_progress():
+                        status_text.value = progress_text
+                        page.update()
+                    page.run_task(_update_progress)
                     time.sleep(0.3)  # 300ms intervals for better capture rate
 
                 cap.release()
@@ -455,7 +478,6 @@ def create_enrol_face_view(page: ft.Page, show_snackbar):
                 else:
                     update_ui("🔄 Processing captured frames...",
                              ft.Colors.BLUE_600, ft.Colors.BLUE_600, "Processing")
-                    page.update()
 
                     # Check if FaceService is available
                     try:

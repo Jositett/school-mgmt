@@ -6,7 +6,7 @@ import threading
 import numpy as np
 import os
 from datetime import date
-from database import get_student_by_id, update_attendance, get_current_attendance_status
+from database import get_student_by_id, update_attendance, get_current_attendance_status, get_attendance_for_student
 
 # Import face_recognition safely
 import sys
@@ -72,7 +72,9 @@ def create_live_attendance_view(page: ft.Page, show_snackbar):
     )
 
     # Recognized students list
-    recognized_list = ft.Column(spacing=8, scroll=ft.ScrollMode.AUTO, height=200)
+    recognized_list = ft.Column(spacing=8)
+    # Track students already shown in the recognized list
+    shown_students = set()
 
     status_text = ft.Text("Click 'Start Camera' to begin live attendance", size=14)
 
@@ -104,9 +106,11 @@ def create_live_attendance_view(page: ft.Page, show_snackbar):
     is_running = False
 
     def start_live_attendance(e):
-        nonlocal is_running, students_present
+        nonlocal is_running, students_present, shown_students
         is_running = True
         students_present = set()
+        shown_students = set()
+        recognized_list.controls.clear()  # Clear the list
         start_btn.disabled = True
         stop_btn.disabled = False
         status_text.value = "Live attendance running... Students detected will be marked present."
@@ -127,13 +131,37 @@ def create_live_attendance_view(page: ft.Page, show_snackbar):
                     break
 
                 # Process every 10th frame to reduce CPU usage
-                current_recognized = []
                 if frame_count % 10 == 0:
                     try:
                         faces = FaceService().recognise(frame)
                         if faces:
-                            new_students = {student_id for student_id, _ in faces}
+                            all_detected = {student_id for student_id, _ in faces}
+                            # Filter out students already marked for today
+                            new_students = {sid for sid in all_detected if not get_attendance_for_student(sid, attendance_date, attendance_date)}
                             students_present.update(new_students)
+                            newly_detected = new_students - shown_students
+
+                            # Update recognized_list with newly detected students
+                            if newly_detected:
+                                for sid in newly_detected:
+                                    student = get_student_by_id(sid)
+                                    if student:
+                                        # Get current attendance status based on time
+                                        attendance_status = get_current_attendance_status(sid)
+                                        # Add to list with appropriate color
+                                        color = ft.Colors.GREEN_700 if attendance_status == "Present" else ft.Colors.ORANGE_700 if attendance_status == "Late" else ft.Colors.RED_700
+                                        recognized_list.controls.append(
+                                            ft.Container(
+                                                content=ft.Row([
+                                                    ft.Container(width=8, height=8, bgcolor=color, border_radius=4),
+                                                    ft.Text(f"{student.name}", size=11, color=color),
+                                                ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                                                padding=ft.padding.symmetric(vertical=4, horizontal=8),
+                                                border_radius=8,
+                                            )
+                                        )
+                                        shown_students.add(sid)
+                                page.update()  # Update UI after adding new students
 
                             # Update status with recognized students and their attendance status
                             student_info = []
@@ -143,7 +171,6 @@ def create_live_attendance_view(page: ft.Page, show_snackbar):
                                     # Get current attendance status based on time
                                     attendance_status = get_current_attendance_status(sid)
                                     student_info.append(f"{student.name} ({attendance_status})")
-                                    current_recognized.append((sid, attendance_status))
                             if student_info:
                                 status_text.value = f"Recognized: {', '.join(student_info)}"
                     except Exception as recognition_error:
@@ -154,84 +181,44 @@ def create_live_attendance_view(page: ft.Page, show_snackbar):
                 # Draw bounding boxes and labels on frame for visualization
                 display_frame = frame.copy()
                 try:
-                    # Always try to detect faces for visualization if face_recognition is available
-                    if FACE_AVAILABLE and face_recognition:
-                        rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
-                        face_locations = face_recognition.face_locations(rgb, model="hog")
-                        encodings = face_recognition.face_encodings(rgb, face_locations)
-                        face_service = FaceService()
-                        if encodings and hasattr(face_service, 'known_encodings') and face_service.known_encodings:
-                            for (top, right, bottom, left), face_encoding in zip(face_locations, encodings):
-                                try:
-                                    # Validate encoding size and filter known encodings
-                                    face_encoding_flat = np.array(face_encoding, dtype=np.float32).flatten()
-                                    if len(face_encoding_flat) != 128:
-                                        continue
+                    # Always try to detect faces for visualization - all detected faces
+                    all_recognized_faces = faces if 'faces' in locals() and faces else []
 
-                                    # Filter known encodings to valid 128-dim vectors
-                                    valid_known_encodings = []
-                                    valid_known_ids = []
+                    for face_data in all_recognized_faces:
+                        student_id, confidence = face_data
+                        student = get_student_by_id(student_id)
+                        if student:
+                            # Get attendance status for this student
+                            attendance_status = get_current_attendance_status(student_id)
+                            # Check if already marked today
+                            is_already_marked = bool(get_attendance_for_student(student_id, attendance_date, attendance_date))
 
-                                    for i, known_enc in enumerate(face_service.known_encodings):
-                                        known_enc_flat = np.array(known_enc, dtype=np.float32).flatten()
-                                        # Ensure exactly 128 dimensions, truncate or pad if necessary
-                                        if len(known_enc_flat) != 128:
-                                            if len(known_enc_flat) > 128:
-                                                # Truncate to 128 dims
-                                                known_enc_flat = known_enc_flat[:128]
-                                                print(f"Truncated encoding for student {face_service.known_ids[i]} from {len(known_enc_flat)} to 128 dims")
-                                            elif len(known_enc_flat) > 0:
-                                                # Pad with zeros to 128 dims
-                                                padded = np.zeros(128, dtype=np.float32)
-                                                padded[:len(known_enc_flat)] = known_enc_flat
-                                                known_enc_flat = padded
-                                                print(f"Padded encoding for student {face_service.known_ids[i]} from {len(known_enc_flat)} to 128 dims")
-                                            else:
-                                                continue  # Skip completely invalid encodings
+                            # Set color based on status and marked status
+                            if is_already_marked:
+                                color = (128, 128, 128)  # Gray for already marked
+                            elif attendance_status == "Present":
+                                color = (0, 255, 0)  # Green
+                            elif attendance_status == "Late":
+                                color = (0, 255, 255)  # Yellow
+                            else:  # Absent
+                                color = (0, 0, 255)  # Red
 
-                                        valid_known_encodings.append(known_enc_flat)
-                                        valid_known_ids.append(face_service.known_ids[i])
+                            # For visualization, we need face locations - using simple approach with face cascade
+                            if FACE_AVAILABLE and face_recognition:
+                                rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
+                                face_locations = face_recognition.face_locations(rgb, model="hog")
+                                # Simple matching by size - this is approximate
+                                for (top, right, bottom, left) in face_locations[:len(all_recognized_faces)]:  # Limit to detected count
+                                    # Draw rectangle
+                                    cv2.rectangle(display_frame, (left, top), (right, bottom), color, 2)
 
-                                    if not valid_known_encodings:
-                                        continue
-
-                                    # Ensure consistent 2D array shape (n, 128)
-                                    try:
-                                        known_encodings_array = np.array(valid_known_encodings, dtype=np.float32)
-                                        # Force reshape to (n, 128) if necessary
-                                        if known_encodings_array.ndim == 1:
-                                            known_encodings_array = known_encodings_array.reshape(1, -1)
-                                        elif known_encodings_array.shape[1] != 128:
-                                            known_encodings_array = known_encodings_array[:, :128]  # Truncate
-                                    except Exception as shape_error:
-                                        print(f"Failed to reshape known encodings array: {shape_error}")
-                                        continue
-                                    distances = face_recognition.face_distance(known_encodings_array, face_encoding_flat)
-                                    best_match_index = np.argmin(distances)
-                                    if distances[best_match_index] <= 0.6:  # Slightly higher threshold for visualization
-                                        student_id = valid_known_ids[best_match_index]
-                                        student = get_student_by_id(student_id)
-                                        if student:
-                                            # Get attendance status for this student
-                                            attendance_status = get_current_attendance_status(student_id)
-
-                                            # Set color based on status
-                                            if attendance_status == "Present":
-                                                color = (0, 255, 0)  # Green
-                                            elif attendance_status == "Late":
-                                                color = (0, 255, 255)  # Yellow
-                                            else:  # Absent
-                                                color = (0, 0, 255)  # Red
-
-                                            # Draw rectangle
-                                            cv2.rectangle(display_frame, (left, top), (right, bottom), color, 2)
-
-                                            # Draw label background and text
-                                            label = f"{student.name}: {attendance_status}"
-                                            cv2.rectangle(display_frame, (left, bottom - 25), (right, bottom), color, cv2.FILLED)
-                                            cv2.putText(display_frame, label, (left + 6, bottom - 6), cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 255), 1)
-                                except ValueError as ve:
-                                    print(f"Face visualization distance calculation error: {ve}")
+                                    # Draw label background and text
+                                    label_text = f"{student.name}: {attendance_status}"
+                                    if is_already_marked:
+                                        label_text += " (Marked)"
+                                    cv2.rectangle(display_frame, (left, bottom - 25), (right, bottom), color, cv2.FILLED)
+                                    cv2.putText(display_frame, label_text, (left + 6, bottom - 6), cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 255), 1)
+                                    break  # Only label the first match
                 except Exception as viz_error:
                     print(f"Face recognition visualization error: {viz_error}")
                 # Convert frame to base64 for display

@@ -182,19 +182,19 @@ def create_day_selector(page: ft.Page):
                     "Weekdays",
                     icon=ft.Icons.WORK,
                     on_click=self.select_weekdays,
-                    style=ft.ButtonStyle(bgcolor=ft.Colors.BLUE_100)
+                    style=ft.ButtonStyle(bgcolor=ft.Colors.BLUE_600, color=ft.Colors.WHITE)
                 ),
                 ft.ElevatedButton(
                     "Weekends",
                     icon=ft.Icons.WEEKEND,
                     on_click=self.select_weekends,
-                    style=ft.ButtonStyle(bgcolor=ft.Colors.GREEN_100)
+                    style=ft.ButtonStyle(bgcolor=ft.Colors.GREEN_600, color=ft.Colors.WHITE)
                 ),
                 ft.ElevatedButton(
                     "All Days",
                     icon=ft.Icons.CALENDAR_VIEW_WEEK,
                     on_click=self.select_all_days,
-                    style=ft.ButtonStyle(bgcolor=ft.Colors.ORANGE_100)
+                    style=ft.ButtonStyle(bgcolor=ft.Colors.ORANGE_600, color=ft.Colors.WHITE)
                 ),
             ], spacing=10, alignment=ft.MainAxisAlignment.CENTER)
 
@@ -229,7 +229,7 @@ def create_day_selector(page: ft.Page):
             self.padding = 20
             self.border = ft.border.all(1, ft.Colors.OUTLINE)
             self.border_radius = 10
-            self.bgcolor = ft.Colors.SURFACE_CONTAINER_HIGHEST
+            # Use default theme Surface color
 
         def update_bitmask(self, bit_value, checked):
             """Update the bitmask when checkbox changes."""
@@ -265,6 +265,8 @@ def create_day_selector(page: ft.Page):
             for i, (_, bv, _) in enumerate(self.days):
                 self.checkboxes[i].value = (self.current_bitmask & bv) != 0
             self.bitmask_display.value = f"Bitmask: {self.current_bitmask}"
+            if self.page is not None:
+                self.page.update()
 
         def get_bitmask(self):
             """Get the current bitmask value."""
@@ -331,7 +333,8 @@ def create_date_range_picker(page: ft.Page):
     )
 
     # Error display area
-    error_text = ft.Text("", size=12, color=ft.Colors.RED_600, visible=False)
+    error_text = ft.Text("", size=12, color=ft.Colors.RED_600)
+    error_container = ft.Container(content=error_text)
 
     def on_start_date_change(date_str):
         """Handle start date selection."""
@@ -376,7 +379,6 @@ def create_date_range_picker(page: ft.Page):
 
     def validate_dates():
         """Validate that end date is not before start date."""
-        nonlocal error_text
         if start_date_value and end_date_value:
             try:
                 start_dt = datetime.datetime.strptime(start_date_value, "%Y-%m-%d").date()
@@ -384,20 +386,20 @@ def create_date_range_picker(page: ft.Page):
 
                 if end_dt < start_dt:
                     error_text.value = "End date cannot be before start date"
-                    error_text.visible = True
+                    error_container.visible = True
                     end_date_field.border_color = ft.Colors.RED_400
                     start_date_field.border_color = ft.Colors.RED_400
                 else:
                     error_text.value = ""
-                    error_text.visible = False
+                    error_container.visible = False
                     end_date_field.border_color = None
                     start_date_field.border_color = None
             except ValueError:
                 error_text.value = "Invalid date format"
-                error_text.visible = True
+                error_container.visible = True
         else:
             error_text.value = ""
-            error_text.visible = False
+            error_container.visible = False
             end_date_field.border_color = None
             start_date_field.border_color = None
 
@@ -417,7 +419,7 @@ def create_date_range_picker(page: ft.Page):
         start_date_field.value = ""
         end_date_field.value = ""
         error_text.value = ""
-        error_text.visible = False
+        error_container.visible = False
         start_date_field.border_color = None
         end_date_field.border_color = None
         update_display()
@@ -443,7 +445,7 @@ def create_date_range_picker(page: ft.Page):
                 ft.Container(width=20),  # Spacing
                 end_date_field,
             ], alignment=ft.MainAxisAlignment.START),
-            error_text,
+            error_container,
             ft.Container(height=10),
             ft.Row([
                 ft.ElevatedButton(
@@ -457,7 +459,7 @@ def create_date_range_picker(page: ft.Page):
         padding=20,
         border=ft.border.all(1, ft.Colors.OUTLINE),
         border_radius=10,
-        bgcolor=getattr(ft.Colors, 'SURFACE_VARIANT', ft.Colors.GREY_50)
+
     )
 
     # Create a custom class to hold the methods
@@ -478,7 +480,7 @@ def create_date_range_picker(page: ft.Page):
                 ft.Container(width=20),  # Spacing
                 end_date_field,
             ], alignment=ft.MainAxisAlignment.START),
-            error_text,
+            error_container,
             ft.Container(height=10),
             ft.Row([
                 ft.ElevatedButton(
@@ -492,7 +494,7 @@ def create_date_range_picker(page: ft.Page):
         padding=20,
         border=ft.border.all(1, ft.Colors.OUTLINE),
         border_radius=10,
-        bgcolor=getattr(ft.Colors, 'SURFACE_VARIANT', ft.Colors.GREY_50)
+
     )
 
     return date_picker_container
